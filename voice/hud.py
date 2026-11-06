@@ -11,7 +11,7 @@ uses the standard library only.
 
 The parent sends one JSON line per change:
     {"state": "listening", "text": "..."}
-    {"state": "loading", "eta": 3.5}   the model loads; the bar fills in about eta seconds
+    {"state": "loading", "eta": 3.5}   the model loads; only the bar shows, 90 % at eta seconds
     {"level": 0.6}       microphone loudness, 0 to 1
     {"state": null}      hide
 The child starts at the first dictation and ends when the model is freed.
@@ -20,6 +20,7 @@ The child starts at the first dictation and ends when the model is freed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -91,7 +92,7 @@ def run() -> int:
     frame = tk.Frame(root, bg=BG, highlightthickness=1, highlightbackground=LINE)
     frame.pack(fill="both", expand=True)
     top = tk.Frame(frame, bg=BG)
-    top.pack(fill="x", padx=2 * pad, pady=(pad, 0))
+    top.pack(fill="x", padx=2 * pad, pady=(pad, pad // 2))
     header = tk.Label(top, anchor="w", font=(FONT, 13, "bold"), fg=DIM, bg=BG)
     header.pack(side="left")
     meter = tk.Canvas(top, height=bar_h, width=width // 4, bg=LINE, highlightthickness=0)
@@ -100,7 +101,7 @@ def run() -> int:
     body = tk.Text(frame, font=(FONT, 20), fg=FG, bg=BG, bd=0, highlightthickness=0,
                    wrap="word", height=1, cursor="arrow")
     body.tag_configure("hint", foreground=DIM)
-    body.pack(fill="x", padx=2 * pad, pady=(pad // 2, pad))
+    body.pack(fill="x", padx=2 * pad, pady=(0, pad))
 
     def place() -> None:
         root.geometry(f"{width}x{max(frame.winfo_height(), 1)}")   # wrap at the final width
@@ -117,7 +118,10 @@ def run() -> int:
     def tick() -> None:
         if not loading["active"]:
             return
-        part = min(0.99, (time.monotonic() - loading["since"]) / loading["eta"])
+        # Linear to 90 % at the expected time, then slower toward 99 %: the bar
+        # never stops while a slow load takes longer than the last one.
+        x = (time.monotonic() - loading["since"]) / loading["eta"]
+        part = 0.9 * x if x < 1 else 0.99 - 0.09 * math.exp(-3 * (x - 1))
         header.configure(text=f"voice: loading the model {int(part * 100)} %")
         meter.coords(bar, 0, 0, int(meter.winfo_width() * part), bar_h)
         root.after(100, tick)
@@ -136,14 +140,17 @@ def run() -> int:
         if state != "listening":
             meter.coords(bar, 0, 0, 0, bar_h)
         loading["active"] = state == "loading"
-        if loading["active"]:
+        if loading["active"]:             # only the header and the bar until the model is ready
             loading.update(since=time.monotonic(), eta=max(message.get("eta", 3.5), 0.5))
             tick()
+            body.pack_forget()
+        elif not body.winfo_manager():
+            body.pack(fill="x", padx=2 * pad, pady=(0, pad))
         body.configure(state="normal")
         body.delete("1.0", "end")
         if text:
             body.insert("end", text)
-        elif state in ("listening", "loading"):
+        elif state == "listening":
             body.insert("end", "speak now", "hint")
         body.see("end")
         body.configure(state="disabled")
