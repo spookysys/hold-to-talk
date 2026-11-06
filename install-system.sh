@@ -23,9 +23,9 @@ if ! grep -q '^overload_tap_timeout' "$conf"; then
 	else
 		printf '[global]\noverload_tap_timeout = 300\n\n' | cat - "$conf.before-talk" > "$conf"
 	fi
-	keyd check "$conf"
-	keyd reload
 fi
+# `keyd check` is no gate: keyd 2.6 exits with an error for a mere warning.
+keyd reload
 
 # dsh-voice let every program of the user write /dev/uinput and read the keyd
 # virtual keyboard. talk needs neither.

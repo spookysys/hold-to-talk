@@ -175,6 +175,7 @@ class Daemon:
         self.unload_at = None
         self.engine.prepare(self.dictation)
         self.hud.show("listening")
+        log("listening")
 
     def _stop_recorder(self) -> bytes:
         recorder, self.recorder = self.recorder, None
@@ -198,6 +199,7 @@ class Daemon:
         self._stop_recorder()
         self.segmenter = None
         if self.listening:
+            log("canceled: another key, or talk-keys went away")
             self.listening = False
             self.engine.drop(self.dictation)
             del self.texts[self.dictation]
