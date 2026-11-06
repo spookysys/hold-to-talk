@@ -221,6 +221,8 @@ class Daemon:
         for phrase in segmenter.feed(rest):
             self.engine.submit(self.dictation, phrase)
         self.engine.submit(self.dictation, segmenter.flush(), last=True)
+        log(f"stopped listening after {time.monotonic() - self.active_since:.1f} s, "
+            f"{segmenter.speech_s:.1f} s of it speech")
         if segmenter.speech_s >= 0.3:
             self.hud.show("writing", " ".join(self.texts[self.dictation]))
 
@@ -242,6 +244,7 @@ class Daemon:
         if texts is None:
             return                       # canceled
         if result.text:
+            log(f"heard: {result.text}")
             texts.append(result.text)
             if not result.last and result.dictation == self.dictation and self.listening:
                 self.hud.show("listening", " ".join(texts))
@@ -249,10 +252,12 @@ class Daemon:
             text = " ".join(self.texts.pop(result.dictation))
             if result.dictation == self.dictation and not self.listening:
                 self.hud.hide()
-            if text:
-                log(f"insert {len(text)} characters")
-                if not output.insert(text + " ", self._paste):
-                    log("the clipboard failed")
+            if not text:
+                log("heard nothing, so nothing is written")
+            elif output.insert(text + " ", self._paste):
+                log(f"wrote {len(text)} characters into the focused field")
+            else:
+                log("the clipboard failed, so nothing is written")
             self._schedule_unload()
 
     def _schedule_unload(self) -> None:
