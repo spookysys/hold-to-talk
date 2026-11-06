@@ -69,6 +69,7 @@ class Daemon:
         self.active_since = 0.0
         self.writing: set[int] = set()   # dictations that wait for their final text
         self.text = ""                   # of the newest dictation, as the box shows it
+        self.loading = False             # the model loads for the newest dictation
         self.unload_at: float | None = None
         self.level_at = 0.0
         self.hud = Hud()
@@ -186,7 +187,11 @@ class Daemon:
         self.text = ""
         self.unload_at = None
         self.engine.begin(self.dictation, bytes(self.before))
-        self.hud.show("listening")
+        self.loading = not LOADED.exists()
+        if self.loading:
+            self.hud.show("loading", eta=round(self.engine.load_s, 1))
+        else:
+            self.hud.show("listening")
         log("listening")
 
     def _stop_recorder(self) -> bytes:
@@ -222,7 +227,8 @@ class Daemon:
         self.listening = False
         self.writing.add(self.dictation)
         log(f"stopped listening after {time.monotonic() - self.active_since:.1f} s")
-        self.hud.show("writing", self.text)
+        if not self.loading:             # else the loading bar stays until the model is ready
+            self.hud.show("writing", self.text)
 
     def _read_audio(self) -> None:
         try:
@@ -234,7 +240,7 @@ class Daemon:
         if self.listening:
             self.engine.feed(self.dictation, data)
             now = time.monotonic()
-            if now - self.level_at >= 0.1:
+            if now - self.level_at >= 0.1 and not self.loading:
                 self.level_at = now
                 samples = np.frombuffer(data[: len(data) // 2 * 2], np.int16) / 32768
                 db = 10 * np.log10(max(float(np.mean(samples ** 2)), 1e-12))
@@ -246,9 +252,12 @@ class Daemon:
 
     def _text(self, result: Result) -> None:
         if result.dictation == self.dictation:
+            self.loading = False
             self.text = result.text
             if self.listening:
                 self.hud.show("listening", result.text)
+            elif not result.final:
+                self.hud.show("writing", result.text)
         if not result.final:
             return
         self.writing.discard(result.dictation)

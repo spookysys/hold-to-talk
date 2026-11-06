@@ -67,6 +67,7 @@ class Engine(threading.Thread):
         self.recognizer = None
         self.stream = None                  # of the dictation in progress
         self.text = ""
+        self.load_s = 3.5                   # how long the last load took; for the loading bar
 
     # Calls from the daemon thread. Each dictation is begin, feed..., end or drop.
 
@@ -97,7 +98,7 @@ class Engine(threading.Thread):
             elif dictation in self.dropped:
                 self.stream = None
             elif job == "begin":
-                self._begin(audio)
+                self._begin(dictation, audio)
             elif job == "feed":
                 self._feed(dictation, pcm(audio))
             elif job == "end":
@@ -107,7 +108,7 @@ class Engine(threading.Thread):
                 self.on_result(Result(dictation, self.text, final=True))
                 self.stream = None
 
-    def _begin(self, audio: bytes) -> None:
+    def _begin(self, dictation: int, audio: bytes) -> None:
         if self.recognizer is None:
             self._load()
         self.stream = self.recognizer.create_stream()
@@ -115,6 +116,7 @@ class Engine(threading.Thread):
         self.text = ""
         self.stream.accept_waveform(RATE, pcm(audio))
         self._decode()
+        self.on_result(Result(dictation, self.text, final=False))   # the model is ready
 
     def _feed(self, dictation: int, samples: np.ndarray, quiet: bool = False) -> None:
         if self.stream is None or not len(samples):
@@ -141,9 +143,10 @@ class Engine(threading.Thread):
             tokens=one("tokens.txt"), encoder=one("encoder*.onnx"),
             decoder=one("decoder*.onnx"), joiner=one("joiner*.onnx"),
             num_threads=self.threads)
+        self.load_s = time.monotonic() - started
         if self.marker:
             self.marker.touch()
-        print(f"voice: model ready in {(time.monotonic() - started) * 1000:.0f} ms", flush=True)
+        print(f"voice: model ready in {self.load_s * 1000:.0f} ms", flush=True)
 
     def _unload(self) -> None:
         if self.recognizer is not None:

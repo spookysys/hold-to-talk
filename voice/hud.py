@@ -11,6 +11,7 @@ uses the standard library only.
 
 The parent sends one JSON line per change:
     {"state": "listening", "text": "..."}
+    {"state": "loading", "eta": 3.5}   the model loads; the bar fills in about eta seconds
     {"level": 0.6}       microphone loudness, 0 to 1
     {"state": null}      hide
 The child starts at the first dictation and ends when the model is freed.
@@ -23,6 +24,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 BG, FG, DIM, LINE, BAR = "#17171a", "#f4f4f5", "#8a8a96", "#3a3a44", "#62a0ea"
 FONT = "Adwaita Sans"
@@ -33,9 +35,9 @@ class Hud:
         self.process: subprocess.Popen | None = None
         self.shown = False
 
-    def show(self, state: str, text: str = "") -> None:
+    def show(self, state: str, text: str = "", **extra) -> None:
         self.shown = True
-        self._send({"state": state, "text": text})
+        self._send({"state": state, "text": text, **extra})
 
     def level(self, value: float) -> None:
         if self.shown:
@@ -110,23 +112,38 @@ def run() -> int:
         root.geometry(f"{width}x{frame.winfo_reqheight()}"
                       f"+{(screen_w - width) // 2}+{int(screen_h * 0.06)}")
 
+    loading = {"since": 0.0, "eta": 1.0, "active": False}
+
+    def tick() -> None:
+        if not loading["active"]:
+            return
+        part = min(0.99, (time.monotonic() - loading["since"]) / loading["eta"])
+        header.configure(text=f"voice: loading the model {int(part * 100)} %")
+        meter.coords(bar, 0, 0, int(meter.winfo_width() * part), bar_h)
+        root.after(100, tick)
+
     def apply(message: dict) -> None:
         if "level" in message and "state" not in message:
             meter.coords(bar, 0, 0, int(meter.winfo_width() * message["level"]), bar_h)
             return
         state = message.get("state")
         if state is None:
+            loading["active"] = False
             root.withdraw()
             return
         text = message.get("text") or ""
         header.configure(text=f"voice: {state}")
         if state != "listening":
             meter.coords(bar, 0, 0, 0, bar_h)
+        loading["active"] = state == "loading"
+        if loading["active"]:
+            loading.update(since=time.monotonic(), eta=max(message.get("eta", 3.5), 0.5))
+            tick()
         body.configure(state="normal")
         body.delete("1.0", "end")
         if text:
             body.insert("end", text)
-        elif state == "listening":
+        elif state in ("listening", "loading"):
             body.insert("end", "speak now", "hint")
         body.see("end")
         body.configure(state="disabled")
