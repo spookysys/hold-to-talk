@@ -13,7 +13,7 @@ import socket
 import subprocess
 import time
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +32,7 @@ class Config:
     model: str = str(Path.home() / ".local/share/voice/models" / MODEL)
     threads: int = 2             # the fastest on a CPU with few fast cores
     language: str = "auto"       # or a code such as "de" or "en"
+    languages: list[str] = field(default_factory=lambda: ["de", "en"])   # for a wrong guess
     hold_ms: int = 300           # must match overload_tap_timeout in keyd
     idle_minutes: float = 30     # then the model is freed
     max_seconds: float = 120
@@ -78,7 +79,7 @@ class Daemon:
         self.selector.register(self.wake_r, selectors.EVENT_READ, "wake")
         LOADED.unlink(missing_ok=True)       # left by a daemon that crashed
         self.engine = Engine(config.model, config.threads, config.language, self._result,
-                             marker=LOADED)
+                             marker=LOADED, languages=config.languages)
         self.engine.start()
         signal.signal(signal.SIGUSR1, self._unload_now)   # `voice unload`
 

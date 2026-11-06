@@ -24,6 +24,7 @@ import os
 import queue
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +49,24 @@ class Result:
     final: bool          # the dictation is over; this is its text
 
 
+def foreign(text: str) -> bool:
+    """True when the text has a letter that is not Latin: the language guess was wrong."""
+    return any(c.isalpha() and "LATIN" not in unicodedata.name(c, "") for c in text)
+
+
+def speechlike(samples: np.ndarray) -> bool:
+    """True when the loudest 20 ms are at least 20 dB above the quiet tenth.
+
+    A wrong language guess can also give no text at all; then the audio
+    shows whether there was something to hear.
+    """
+    frames = len(samples) // 320
+    if frames < 10:
+        return False
+    rms = np.sqrt((samples[: frames * 320].reshape(frames, 320) ** 2).mean(axis=1))
+    return float(rms.max()) > max(10 * float(np.percentile(rms, 10)), 1e-3)
+
+
 def pcm(data: bytes) -> np.ndarray:
     """16-bit mono samples as the float samples that the model takes."""
     return np.frombuffer(data[: len(data) // 2 * 2], np.int16).astype(np.float32) / 32768
@@ -55,11 +74,13 @@ def pcm(data: bytes) -> np.ndarray:
 
 class Engine(threading.Thread):
     def __init__(self, model: str, threads: int, language: str, on_result,
-                 marker: Path | None = None):
+                 marker: Path | None = None, languages: list[str] | None = None):
         super().__init__(daemon=True, name="engine")
         self.model_dir = model
         self.threads = threads
         self.language = language
+        # The user's languages. A text in another script is decoded again in each.
+        self.languages = languages or []
         self.on_result = on_result          # called in this thread
         self.marker = marker                # a file that exists while the model is loaded
         self.jobs: queue.Queue = queue.Queue()
@@ -67,6 +88,7 @@ class Engine(threading.Thread):
         self.recognizer = None
         self.stream = None                  # of the dictation in progress
         self.text = ""
+        self.audio = bytearray()            # of the dictation in progress, for a second decode
         self.load_s = 3.5                   # how long the last load took; for the loading bar
 
     # Calls from the daemon thread. Each dictation is begin, feed..., end or drop.
@@ -100,20 +122,24 @@ class Engine(threading.Thread):
             elif job == "begin":
                 self._begin(dictation, audio)
             elif job == "feed":
+                self.audio += audio
                 self._feed(dictation, pcm(audio))
             elif job == "end":
                 self._feed(dictation, np.zeros(int(TAIL_S * RATE), np.float32), quiet=True)
                 self.stream.input_finished()
                 self._decode()
+                wrong = foreign(self.text) or (not self.text and speechlike(pcm(bytes(self.audio))))
+                if wrong and self.languages:
+                    self.text = self._again()
                 self.on_result(Result(dictation, self.text, final=True))
-                self.stream = None
+                self.stream, self.audio = None, bytearray()
 
     def _begin(self, dictation: int, audio: bytes) -> None:
         if self.recognizer is None:
             self._load()
         self.stream = self.recognizer.create_stream()
         self.stream.set_option("language", self.language)
-        self.text = ""
+        self.text, self.audio = "", bytearray(audio)
         self.stream.accept_waveform(RATE, pcm(audio))
         self._decode()
         self.on_result(Result(dictation, self.text, final=False))   # the model is ready
@@ -131,6 +157,26 @@ class Engine(threading.Thread):
         while self.recognizer.is_ready(self.stream):
             self.recognizer.decode_stream(self.stream)
         self.text = " ".join(self.recognizer.get_result(self.stream).split())
+
+    def _again(self) -> str:
+        """Decode the dictation again in each of the user's languages; keep the surest text."""
+        started, found = time.monotonic(), []
+        for language in self.languages:
+            stream = self.recognizer.create_stream()
+            stream.set_option("language", language)
+            stream.accept_waveform(RATE, pcm(bytes(self.audio)))
+            stream.accept_waveform(RATE, np.zeros(int(TAIL_S * RATE), np.float32))
+            stream.input_finished()
+            while self.recognizer.is_ready(stream):
+                self.recognizer.decode_stream(stream)
+            result = self.recognizer.get_result_all(stream)
+            score = float(np.mean(result.ys_probs)) if len(result.ys_probs) else -np.inf
+            found.append((score, language, " ".join(result.text.split())))
+        score, language, text = max(found)
+        print(f"voice: {self.text!r} looked like a wrong language; decoded again as "
+              f"{', '.join(self.languages)} in {(time.monotonic() - started) * 1000:.0f} ms, "
+              f"kept {language}", flush=True)
+        return text
 
     def _load(self) -> None:
         import sherpa_onnx

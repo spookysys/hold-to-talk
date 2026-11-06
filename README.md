@@ -65,6 +65,7 @@ pkexec ./install-system.sh "$(id -un)"    # helper, keyd setting (root)
 
 ```toml
 language = "auto"          # or a code such as "de" or "en"
+languages = ["de", "en"]   # yours: a text in another script is decoded again in these
 threads = 2                # more threads are slower on CPUs with few fast cores
 idle_minutes = 30          # then the model is freed
 hold_ms = 300              # must match overload_tap_timeout in keyd
