@@ -12,17 +12,22 @@ from __future__ import annotations
 
 import ctypes
 import gc
+import os
 import queue
 import re
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
 from .segment import RATE
 
 MARGIN_S = 2.0   # a tighter window garbles short phrases
+
+# Exists while the model is in memory; `voice status` reads it.
+LOADED = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "voice-model-loaded"
 
 # whisper.cpp detects the language before it applies the new audio_ctx, so the
 # detection uses the window of the previous call (src/whisper.cpp,
@@ -65,8 +70,10 @@ class Result:
 
 
 class Engine(threading.Thread):
-    def __init__(self, model: str, threads: int, languages: list[str], on_result):
+    def __init__(self, model: str, threads: int, languages: list[str], on_result,
+                 marker: Path | None = None):
         super().__init__(daemon=True, name="engine")
+        self.marker = marker                # a file that exists while the model is loaded
         self.model_path = model
         self.threads = threads
         self.languages = languages
@@ -120,7 +127,9 @@ class Engine(threading.Thread):
         # starts to speak.
         self.model.transcribe(np.zeros(RATE, np.float32), language=self.languages[0],
                               audio_ctx=MIN_CTX, no_context=True)
-        print(f"talk: model ready in {(time.monotonic() - started) * 1000:.0f} ms", flush=True)
+        if self.marker:
+            self.marker.touch()
+        print(f"voice: model ready in {(time.monotonic() - started) * 1000:.0f} ms", flush=True)
 
     def _unload(self) -> None:
         if self.model is not None:
@@ -129,7 +138,9 @@ class Engine(threading.Thread):
             self.dropped.clear()
             gc.collect()
             ctypes.CDLL("libc.so.6").malloc_trim(0)   # glibc keeps freed memory otherwise
-            print("talk: model freed", flush=True)
+            if self.marker:
+                self.marker.unlink(missing_ok=True)
+            print("voice: model freed", flush=True)
 
     def _transcribe(self, job: Job) -> str:
         """The first phrase of a dictation sets its language for the rest."""
@@ -144,7 +155,7 @@ class Engine(threading.Thread):
             self.language[job.dictation] = language
         else:
             text, _ = self._run(job.audio, language)
-        print(f"talk: {len(job.audio) / RATE:.1f} s of speech in "
+        print(f"voice: {len(job.audio) / RATE:.1f} s of speech in "
               f"{(time.monotonic() - started) * 1000:.0f} ms ({language})", flush=True)
         return "" if invented(text) else text
 

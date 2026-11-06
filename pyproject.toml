@@ -1,5 +1,5 @@
 [project]
-name = "talk"
+name = "voice"
 version = "0.1.0"
 description = "Hold the launch key and speak; the text goes into the focused field."
 requires-python = ">=3.13"
@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-talk = "talk.__main__:entry"
+voice = "voice.__main__:entry"
 
 [dependency-groups]
 dev = ["pytest==9.0.1"]

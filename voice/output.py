@@ -1,7 +1,7 @@
 """Put text into the focused field: clipboard, paste chord, clipboard back.
 
 GNOME on Wayland lets no program type into another window. The clipboard
-reaches every application. talk-keys makes keyd send the paste chord, so this
+reaches every application. voice-keys makes keyd send the paste chord, so this
 user process needs no access to /dev/uinput.
 
 Shift+Insert pastes the clipboard in GTK, Qt and browsers, and the primary

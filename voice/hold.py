@@ -1,6 +1,6 @@
 """Decide whether a hold of the launch key is a dictation.
 
-talk-keys reports three events: "down", "key" and "up". A hold becomes a
+voice-keys reports three events: "down", "key" and "up". A hold becomes a
 dictation when the launch key stays down alone for the threshold. Any other key
 cancels the hold, also after the threshold, because then the hold was a key
 combination that the user started slowly.

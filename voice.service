@@ -1,10 +1,10 @@
 [Unit]
-Description=talk: hold the launch key and speak
+Description=voice: hold the launch key and speak
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
-ExecStart=%h/.local/bin/talk run
+ExecStart=%h/.local/bin/voice run
 Restart=on-failure
 RestartSec=2
 

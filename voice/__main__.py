@@ -1,0 +1,148 @@
+"""voice: hold the launch key and speak; the text goes into the focused field.
+
+Commands:
+    voice start      start listening to the launch key
+    voice stop       stop listening to the launch key
+    voice restart    restart, for example after a change of the settings
+    voice unload     free the model now, instead of after the idle minutes
+    voice status     running or not, model loaded or not, memory in use
+    voice log        follow what voice hears and how long it takes
+
+    voice transcribe FILE   a 16 kHz mono WAV through the live path, for tests
+"""
+
+from __future__ import annotations
+
+import os
+import signal
+import subprocess
+import sys
+
+SERVICE = "voice.service"
+
+
+def systemctl(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["systemctl", "--user", *args, SERVICE],
+                          capture_output=True, text=True)
+
+
+def main_pid() -> int:
+    return int(systemctl("show", "-p", "MainPID", "--value").stdout.strip() or 0)
+
+
+def control(action: str) -> int:
+    result = systemctl(action)
+    if result.returncode:
+        print(f"voice: {action} failed: {result.stderr.strip()}", file=sys.stderr)
+        return 1
+    return status()
+
+
+def unload() -> int:
+    from .engine import LOADED
+
+    pid = main_pid()
+    if not pid:
+        print("voice: not running")
+        return 1
+    if not LOADED.exists():
+        print("voice: the model is not loaded")
+        return 0
+    os.kill(pid, signal.SIGUSR1)       # the daemon frees the model
+    print("voice: model freed")
+    return 0
+
+
+def status() -> int:
+    from .engine import LOADED
+
+    state = systemctl("is-active").stdout.strip()
+    pid = main_pid()
+    if state != "active" or not pid:
+        print(f"voice: {state}")
+        return 0 if state == "inactive" else 1
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            rss = next(int(line.split()[1]) for line in f if line.startswith("VmRSS:"))
+    except (OSError, StopIteration):
+        rss = 0
+    model = "loaded" if LOADED.exists() else "not loaded"
+    print(f"voice: running, model {model}, {rss // 1024} MB")
+    return 0
+
+
+def log() -> int:
+    try:
+        return subprocess.run(["journalctl", "--user", "-u", SERVICE, "-f", "-n", "20",
+                               "-o", "cat"]).returncode
+    except KeyboardInterrupt:
+        return 0
+
+
+def transcribe(path: str) -> int:
+    import queue
+    import time
+    import wave
+
+    from .daemon import Config
+    from .engine import Engine
+    from .segment import RATE, Segmenter
+
+    config = Config.load()
+    with wave.open(path) as w:
+        if (w.getframerate(), w.getnchannels(), w.getsampwidth()) != (RATE, 1, 2):
+            print("voice: the file must be 16 kHz, mono, 16 bit", file=sys.stderr)
+            return 2
+        data = w.readframes(w.getnframes())
+    results: queue.Queue = queue.Queue()
+    engine = Engine(config.model, config.threads, config.languages, results.put)
+    engine.start()
+    segmenter = Segmenter()
+    chunk = RATE // 10 * 2          # 100 ms, as the microphone delivers it
+    for start in range(0, len(data), chunk):
+        for phrase in segmenter.feed(data[start:start + chunk]):
+            engine.submit(1, phrase)
+    released = time.monotonic()
+    engine.submit(1, segmenter.flush(), last=True)
+    texts = []
+    while True:
+        result = results.get()
+        if result.text:
+            texts.append(result.text)
+        if result.last:
+            break
+    print(f"voice: {time.monotonic() - released:.2f} s after the end", file=sys.stderr)
+    print(" ".join(texts))
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    args = argv[1:]
+    commands = {
+        ("start",): lambda: control("start"),
+        ("stop",): lambda: control("stop"),
+        ("restart",): lambda: control("restart"),
+        ("unload",): unload,
+        ("status",): status,
+        ("log",): log,
+    }
+    if tuple(args) in commands:
+        return commands[tuple(args)]()
+    if args == ["run"]:                         # the service runs this
+        from .daemon import main as run
+        return run()
+    if args == ["hud"]:                         # the daemon starts this
+        from .hud import run as hud
+        return hud()
+    if len(args) == 2 and args[0] == "transcribe":
+        return transcribe(args[1])
+    print(__doc__.strip())
+    return 0 if not args or args[0] in ("help", "-h", "--help") else 2
+
+
+def entry() -> None:
+    sys.exit(main(sys.argv))
+
+
+if __name__ == "__main__":
+    entry()

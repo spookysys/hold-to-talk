@@ -1,10 +1,10 @@
 [Unit]
-Description=talk key helper: reports holds of the launch key to user %i
-Requires=talk-keys@%i.socket keyd.service
+Description=voice key helper: reports holds of the launch key to user %i
+Requires=voice-keys@%i.socket keyd.service
 After=keyd.service
 
 [Service]
-ExecStart=/usr/local/libexec/talk-keys
+ExecStart=/usr/local/libexec/voice-keys
 Restart=on-failure
 
 # A throwaway user with two groups: keyd for `keyd listen` and `keyd do`,

@@ -1,4 +1,4 @@
-from talk.hold import ACTIVE, BEGIN, DISCARD, FINISH, IDLE, RECORD, Hold
+from voice.hold import ACTIVE, BEGIN, DISCARD, FINISH, IDLE, RECORD, Hold
 
 
 def run(steps, threshold=0.3):

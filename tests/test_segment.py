@@ -1,6 +1,6 @@
 import numpy as np
 
-from talk.segment import RATE, Segmenter
+from voice.segment import RATE, Segmenter
 
 
 def tone(seconds, level=0.3):

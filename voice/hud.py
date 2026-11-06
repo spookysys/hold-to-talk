@@ -1,4 +1,4 @@
-"""The caption box that shows what talk hears.
+"""The caption box that shows what voice hears.
 
 The box runs in a child process, so a slow redraw never delays the key
 handling. It is an X11 window without decorations (through XWayland), because
@@ -45,7 +45,7 @@ class Hud:
         if self.process is None or self.process.poll() is not None:
             if message["state"] is None:
                 return
-            self.process = subprocess.Popen([sys.executable, "-m", "talk", "hud"],
+            self.process = subprocess.Popen([sys.executable, "-m", "voice", "hud"],
                                             stdin=subprocess.PIPE, text=True, bufsize=1)
         try:
             self.process.stdin.write(json.dumps(message) + "\n")
@@ -75,7 +75,7 @@ def run() -> int:
             root.withdraw()
             return
         text = " ".join(str(message.get("text") or "").split())
-        header.configure(text=f"talk: {message['state']}")
+        header.configure(text=f"voice: {message['state']}")
         body.configure(text=("…" + text[-400:]) if len(text) > 400 else text)
         root.update_idletasks()
         width = max(420, min(860, frame.winfo_reqwidth()))

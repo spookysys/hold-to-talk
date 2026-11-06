@@ -1,5 +1,5 @@
 /*
- * talk-keys: tell the talk daemon when the launch key is held, and nothing
+ * voice-keys: tell the voice daemon when the launch key is held, and nothing
  * more.
  *
  * keyd holds the keyboards, so no other program sees the raw keys. This helper
@@ -107,7 +107,7 @@ static void start_listen(void)
 	int master;
 	pid_t pid = forkpty(&master, NULL, NULL, NULL);
 	if (pid < 0) {
-		perror("talk-keys: forkpty");
+		perror("voice-keys: forkpty");
 		return;
 	}
 	if (pid == 0) {
@@ -136,7 +136,7 @@ static void read_listen(void)
 	char buf[512];
 	ssize_t got = read(listen_fd, buf, sizeof buf);
 	if (got <= 0) {
-		fprintf(stderr, "talk-keys: keyd listen ended\n");
+		fprintf(stderr, "voice-keys: keyd listen ended\n");
 		stop_listen();
 		return;
 	}
@@ -187,7 +187,7 @@ static void read_keyboard(void)
 	if (got < 0 && errno == EAGAIN)
 		return;
 	if (got <= 0) {
-		fprintf(stderr, "talk-keys: keyboard gone\n");
+		fprintf(stderr, "voice-keys: keyboard gone\n");
 		close(keyboard);
 		keyboard = -1;
 		return;
@@ -260,12 +260,12 @@ static int open_server(const char *path)
 		return 3;
 	}
 	if (!path) {
-		fprintf(stderr, "talk-keys: no socket from systemd; use --socket PATH\n");
+		fprintf(stderr, "voice-keys: no socket from systemd; use --socket PATH\n");
 		return -1;
 	}
 	struct sockaddr_un addr = {.sun_family = AF_UNIX};
 	if (strlen(path) >= sizeof addr.sun_path) {
-		fprintf(stderr, "talk-keys: socket path longer than %zu bytes\n",
+		fprintf(stderr, "voice-keys: socket path longer than %zu bytes\n",
 			sizeof addr.sun_path - 1);
 		return -1;
 	}
@@ -273,7 +273,7 @@ static int open_server(const char *path)
 	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	unlink(path);
 	if (fd < 0 || bind(fd, (struct sockaddr *)&addr, sizeof addr) < 0 || listen(fd, 4) < 0) {
-		perror("talk-keys: socket");
+		perror("voice-keys: socket");
 		return -1;
 	}
 	chmod(path, 0600);
@@ -303,7 +303,7 @@ int main(int argc, char **argv)
 		case 'l': layer = optarg; break;
 		case 'c': chord = optarg; break;
 		default:
-			fprintf(stderr, "usage: talk-keys [--socket PATH] [--layer NAME] [--chord KEYS]\n");
+			fprintf(stderr, "usage: voice-keys [--socket PATH] [--layer NAME] [--chord KEYS]\n");
 			return 2;
 		}
 	}

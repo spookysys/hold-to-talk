@@ -1,4 +1,4 @@
-"""The talk daemon: one loop that waits on the key helper and the microphone.
+"""The voice daemon: one loop that waits on the key helper and the microphone.
 
 While nothing happens, the loop sleeps in select() without a timeout, so it
 costs no CPU. The microphone is open only while the launch key is down.
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import selectors
+import signal
 import socket
 import subprocess
 import time
@@ -17,22 +18,22 @@ from pathlib import Path
 
 from . import hold as H
 from . import output
-from .engine import Engine, Result
+from .engine import LOADED, Engine, Result
 from .hud import Hud
 from .segment import Segmenter
 
-CONFIG = Path.home() / ".config/talk/config.toml"
+CONFIG = Path.home() / ".config/voice/config.toml"
 
 
 @dataclass
 class Config:
-    model: str = str(Path.home() / ".local/share/talk/models/ggml-small-q8_0.bin")
+    model: str = str(Path.home() / ".local/share/voice/models/ggml-small-q8_0.bin")
     threads: int = max(1, (os.cpu_count() or 2) - 2)
     languages: list[str] = field(default_factory=lambda: ["de", "en"])
     hold_ms: int = 300           # must match overload_tap_timeout in keyd
     idle_minutes: float = 5      # then the model is freed
     max_seconds: float = 120
-    socket: str = "/run/talk-keys.sock"
+    socket: str = "/run/voice-keys.sock"
 
     @classmethod
     def load(cls) -> "Config":
@@ -43,12 +44,12 @@ class Config:
         known = cls.__dataclass_fields__
         unknown = set(data) - set(known)
         if unknown:
-            raise SystemExit(f"talk: unknown settings in {CONFIG}: {', '.join(sorted(unknown))}")
+            raise SystemExit(f"voice: unknown settings in {CONFIG}: {', '.join(sorted(unknown))}")
         return cls(**data)
 
 
 def log(message: str) -> None:
-    print(f"talk: {message}", flush=True)
+    print(f"voice: {message}", flush=True)
 
 
 class Daemon:
@@ -70,8 +71,15 @@ class Daemon:
         self.wake_r, self.wake_w = os.pipe()
         self.results: list[Result] = []
         self.selector.register(self.wake_r, selectors.EVENT_READ, "wake")
-        self.engine = Engine(config.model, config.threads, config.languages, self._result)
+        LOADED.unlink(missing_ok=True)       # left by a daemon that crashed
+        self.engine = Engine(config.model, config.threads, config.languages, self._result,
+                             marker=LOADED)
         self.engine.start()
+        signal.signal(signal.SIGUSR1, self._unload_now)   # `voice unload`
+
+    def _unload_now(self, signum, frame) -> None:
+        self.unload_at = 0.0                 # the loop frees the model at its next pass
+        os.write(self.wake_w, b"u")          # and select() must return for that
 
     # Results arrive in the engine thread; the loop handles them.
 
@@ -123,10 +131,10 @@ class Daemon:
         except OSError as error:
             sock.close()
             if self.connect_at == 0.0:
-                log(f"waiting for talk-keys at {self.config.socket}: {error}")
+                log(f"waiting for voice-keys at {self.config.socket}: {error}")
             self.connect_at = time.monotonic() + 2
             return
-        log("connected to talk-keys")
+        log("connected to voice-keys")
         self.keys = sock
         self.keys_buffer = b""
         self.selector.register(sock, selectors.EVENT_READ, "keys")
@@ -134,7 +142,7 @@ class Daemon:
     def _read_keys(self) -> None:
         data = self.keys.recv(4096)
         if not data:
-            log("talk-keys went away")
+            log("voice-keys went away")
             self.selector.unregister(self.keys)
             self.keys.close()
             self.keys = None
@@ -199,7 +207,7 @@ class Daemon:
         self._stop_recorder()
         self.segmenter = None
         if self.listening:
-            log("canceled: another key, or talk-keys went away")
+            log("canceled: another key, or voice-keys went away")
             self.listening = False
             self.engine.drop(self.dictation)
             del self.texts[self.dictation]

@@ -1,8 +1,8 @@
 [Unit]
-Description=talk key helper socket for user %i
+Description=voice key helper socket for user %i
 
 [Socket]
-ListenStream=/run/talk-keys.sock
+ListenStream=/run/voice-keys.sock
 # Only the seat user may connect: the socket reveals when the launch key is held.
 SocketUser=%i
 SocketMode=0600
