@@ -25,7 +25,7 @@ design for users; read it first.
 
 ## Tests and checks
 
-- `uv run pytest` for the hold logic and the segmenter.
+- `uv run pytest` for the hold logic.
 - `voice transcribe FILE.wav` for the speech path without the key.
 - The key behavior can only be checked on the real keyboard. Say which checks
   ran on hardware and which did not.

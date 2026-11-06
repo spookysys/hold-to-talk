@@ -5,31 +5,49 @@ handling. It is an X11 window without decorations (through XWayland), because
 GNOME gives such a window no focus: the paste still goes to the field that the
 user works in. A native Wayland window would take the focus.
 
-The parent sends one JSON line per change. The child starts at the first
-dictation and ends when the model is freed, so it costs no memory when idle.
+The child runs in the system Python. The Tk in uv's Python has no Xft, so it
+knows only bitmap fonts and draws all text at 13 pixels. This file therefore
+uses the standard library only.
+
+The parent sends one JSON line per change:
+    {"state": "listening", "text": "..."}
+    {"level": 0.6}       microphone loudness, 0 to 1
+    {"state": null}      hide
+The child starts at the first dictation and ends when the model is freed.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 
-BG, FG, DIM, LINE = "#17171a", "#f4f4f5", "#9595a0", "#3a3a44"
+BG, FG, DIM, LINE, BAR = "#17171a", "#f4f4f5", "#8a8a96", "#3a3a44", "#62a0ea"
+FONT = "Adwaita Sans"
 
 
 class Hud:
     def __init__(self) -> None:
         self.process: subprocess.Popen | None = None
+        self.shown = False
 
     def show(self, state: str, text: str = "") -> None:
+        self.shown = True
         self._send({"state": state, "text": text})
 
+    def level(self, value: float) -> None:
+        if self.shown:
+            self._send({"level": round(value, 2)})
+
     def hide(self) -> None:
-        self._send({"state": None})
+        if self.shown:
+            self.shown = False
+            self._send({"state": None})
 
     def close(self) -> None:
+        self.shown = False
         process, self.process = self.process, None
         if process is None:
             return
@@ -43,9 +61,10 @@ class Hud:
         if not os.environ.get("DISPLAY"):
             return
         if self.process is None or self.process.poll() is not None:
-            if message["state"] is None:
+            if message.get("state") is None:
                 return
-            self.process = subprocess.Popen([sys.executable, "-m", "voice", "hud"],
+            python = shutil.which("python3", path="/usr/bin") or sys.executable
+            self.process = subprocess.Popen([python, "-I", os.path.abspath(__file__)],
                                             stdin=subprocess.PIPE, text=True, bufsize=1)
         try:
             self.process.stdin.write(json.dumps(message) + "\n")
@@ -62,26 +81,57 @@ def run() -> int:
     root.withdraw()
     root.overrideredirect(True)
     root.attributes("-topmost", True)
+    screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
+    width = int(screen_w * 0.5)
+    pad = int(root.winfo_fpixels("10p"))
+    bar_h = int(pad * 0.6)
+
     frame = tk.Frame(root, bg=BG, highlightthickness=1, highlightbackground=LINE)
     frame.pack(fill="both", expand=True)
-    header = tk.Label(frame, anchor="w", font=("Cantarell", 10, "bold"), fg=DIM, bg=BG, padx=20)
-    header.pack(fill="x", pady=(12, 0))
-    body = tk.Label(frame, anchor="w", justify="left", font=("Cantarell", 16), fg=FG, bg=BG,
-                    padx=20, wraplength=800)
-    body.pack(fill="x", pady=(2, 14))
+    top = tk.Frame(frame, bg=BG)
+    top.pack(fill="x", padx=2 * pad, pady=(pad, 0))
+    header = tk.Label(top, anchor="w", font=(FONT, 13, "bold"), fg=DIM, bg=BG)
+    header.pack(side="left")
+    meter = tk.Canvas(top, height=bar_h, width=width // 4, bg=LINE, highlightthickness=0)
+    meter.pack(side="right", pady=pad // 2)
+    bar = meter.create_rectangle(0, 0, 0, bar_h, fill=BAR, width=0)
+    body = tk.Text(frame, font=(FONT, 20), fg=FG, bg=BG, bd=0, highlightthickness=0,
+                   wrap="word", height=1, cursor="arrow")
+    body.tag_configure("hint", foreground=DIM)
+    body.pack(fill="x", padx=2 * pad, pady=(pad // 2, pad))
+
+    def place() -> None:
+        root.geometry(f"{width}x{max(frame.winfo_height(), 1)}")   # wrap at the final width
+        root.update_idletasks()
+        lines = body.count("1.0", "end", "displaylines") or 1
+        lines = lines[0] if isinstance(lines, tuple) else lines
+        body.configure(height=min(6, max(1, lines)))   # the newest lines when it is longer
+        root.update_idletasks()
+        root.geometry(f"{width}x{frame.winfo_reqheight()}"
+                      f"+{(screen_w - width) // 2}+{int(screen_h * 0.06)}")
 
     def apply(message: dict) -> None:
-        if message.get("state") is None:
+        if "level" in message and "state" not in message:
+            meter.coords(bar, 0, 0, int(meter.winfo_width() * message["level"]), bar_h)
+            return
+        state = message.get("state")
+        if state is None:
             root.withdraw()
             return
-        text = " ".join(str(message.get("text") or "").split())
-        header.configure(text=f"voice: {message['state']}")
-        body.configure(text=("…" + text[-400:]) if len(text) > 400 else text)
-        root.update_idletasks()
-        width = max(420, min(860, frame.winfo_reqwidth()))
-        root.geometry(f"{width}x{frame.winfo_reqheight()}"
-                      f"+{(root.winfo_screenwidth() - width) // 2}+96")
-        root.deiconify()
+        text = message.get("text") or ""
+        header.configure(text=f"voice: {state}")
+        if state != "listening":
+            meter.coords(bar, 0, 0, 0, bar_h)
+        body.configure(state="normal")
+        body.delete("1.0", "end")
+        if text:
+            body.insert("end", text)
+        elif state == "listening":
+            body.insert("end", "speak now", "hint")
+        body.see("end")
+        body.configure(state="disabled")
+        root.deiconify()       # Tk counts the wrapped lines only of a visible window
+        place()
 
     def read() -> None:
         for line in sys.stdin:
@@ -95,3 +145,7 @@ def run() -> int:
     threading.Thread(target=read, daemon=True).start()
     root.mainloop()
     return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run())

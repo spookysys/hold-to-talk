@@ -85,8 +85,7 @@ def transcribe(path: str) -> int:
     import wave
 
     from .daemon import Config
-    from .engine import Engine
-    from .segment import RATE, Segmenter
+    from .engine import RATE, Engine
 
     config = Config.load()
     with wave.open(path) as w:
@@ -95,24 +94,18 @@ def transcribe(path: str) -> int:
             return 2
         data = w.readframes(w.getnframes())
     results: queue.Queue = queue.Queue()
-    engine = Engine(config.model, config.threads, config.languages, results.put)
+    engine = Engine(config.model, config.threads, config.language, results.put)
     engine.start()
-    segmenter = Segmenter()
-    chunk = RATE // 10 * 2          # 100 ms, as the microphone delivers it
-    for start in range(0, len(data), chunk):
-        for phrase in segmenter.feed(data[start:start + chunk]):
-            engine.submit(1, phrase)
-    released = time.monotonic()
-    engine.submit(1, segmenter.flush(), last=True)
-    texts = []
-    while True:
-        result = results.get()
-        if result.text:
-            texts.append(result.text)
-        if result.last:
-            break
-    print(f"voice: {time.monotonic() - released:.2f} s after the end", file=sys.stderr)
-    print(" ".join(texts))
+    engine.begin(1, b"")
+    piece = RATE // 10 * 2          # 100 ms, as the microphone delivers it
+    for start in range(0, len(data), piece):
+        engine.feed(1, data[start:start + piece])
+    engine.end(1)
+    started = time.monotonic()
+    while not (result := results.get()).final:
+        pass
+    print(f"voice: {time.monotonic() - started:.2f} s after the end of the file", file=sys.stderr)
+    print(result.text)
     return 0
 
 

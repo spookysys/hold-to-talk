@@ -6,7 +6,7 @@ requires-python = ">=3.13"
 license = "MIT"
 dependencies = [
     "numpy==2.4.6",
-    "pywhispercpp==1.5.1",
+    "sherpa-onnx==2.0.1",
 ]
 
 [project.scripts]

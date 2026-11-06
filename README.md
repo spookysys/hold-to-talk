@@ -8,8 +8,10 @@ and launch plus another key still works as before, also when you press the
 other key slowly. voice adds no delay to any key.
 
 It runs on Linux with GNOME on Wayland and [keyd](https://github.com/rvaiya/keyd).
-Speech recognition is local: [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
-with the Whisper `small` model, in German and English.
+Speech recognition is local and streaming:
+[Nemotron 3.5 ASR streaming](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
+through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). It detects the
+language by itself; German and English are tested.
 
 ## How it works
 
@@ -27,9 +29,9 @@ keyboard -> keyd -> voice-keys (system service) -> voice (your session) -> clipb
   other key cancels it. The microphone records from the moment the key goes
   down, so the start of the first word is not lost. keyd uses the same
   300 ms (`overload_tap_timeout`): a longer hold does not open the overview.
-- While you speak, voice cuts the audio at long pauses and transcribes each
-  phrase once. After the release, only the last phrase must wait. A caption
-  box shows what voice hears.
+- The audio goes into the model in pieces as it arrives, and the text grows
+  while you speak. A caption box shows it, with a level bar for the
+  microphone. After the release, only the last piece is left.
 - The text goes into the clipboard and the primary selection, voice-keys makes
   keyd send Shift+Insert, and the old clipboard text comes back after a second.
 
@@ -40,9 +42,10 @@ Measured on an Intel i3-1215U with 8 GB RAM:
 | | |
 |---|---|
 | idle | 0 % CPU, about 35 MB RAM |
-| dictation | about 540 MB RAM; the model loads in about 1.2 s while you start to speak |
-| after the release | 2 to 3 s for a phrase of 10 s; less when you pause between sentences |
-| after 5 idle minutes | the model is freed; RAM goes back to about 55 MB |
+| dictation | about half of 2 CPU threads while you speak; about 1 GB RAM |
+| first dictation after a break | the model loads in about 3.5 s; the text then catches up |
+| after the release | 0.1 to 0.3 s until the text is in the field |
+| after 30 idle minutes | the model is freed, and the RAM with it |
 
 ## Install
 
@@ -61,9 +64,9 @@ pkexec ./install-system.sh "$(id -un)"    # helper, keyd setting (root)
 `~/.config/voice/config.toml`, all optional:
 
 ```toml
-languages = ["de", "en"]   # the first is the fallback for an unclear phrase
-threads = 6
-idle_minutes = 5           # then the model is freed
+language = "auto"          # or a code such as "de" or "en"
+threads = 2                # more threads are slower on CPUs with few fast cores
+idle_minutes = 30          # then the model is freed
 hold_ms = 300              # must match overload_tap_timeout in keyd
 ```
 
