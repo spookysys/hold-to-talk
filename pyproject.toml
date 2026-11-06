@@ -1,0 +1,20 @@
+[project]
+name = "talk"
+version = "0.1.0"
+description = "Hold the launch key and speak; the text goes into the focused field."
+requires-python = ">=3.13"
+license = "MIT"
+dependencies = [
+    "numpy==2.4.6",
+    "pywhispercpp==1.5.1",
+]
+
+[project.scripts]
+talk = "talk.__main__:entry"
+
+[dependency-groups]
+dev = ["pytest==9.0.1"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

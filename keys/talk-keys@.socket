@@ -1,0 +1,11 @@
+[Unit]
+Description=talk key helper socket for user %i
+
+[Socket]
+ListenStream=/run/talk-keys.sock
+# Only the seat user may connect: the socket reveals when the launch key is held.
+SocketUser=%i
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,6 @@
+/private/
+/worktrees/
+/.venv/
+__pycache__/
+/build/
+/keys/talk-keys
