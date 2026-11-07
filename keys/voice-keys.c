@@ -8,7 +8,7 @@
  *   - `keyd listen`, which prints "+overlay" and "-overlay" when the layer of
  *     the launch key goes on and off;
  *   - the "keyd virtual keyboard" device, which shows each key that keyd
- *     sends. While the launch key is held alone, keyd sends nothing.
+ *     sends. While the launch key is held alone, keyd sends only modifiers.
  *
  * Each client on the socket receives one line per change:
  *
@@ -180,6 +180,18 @@ static void open_keyboard(void)
 	closedir(dir);
 }
 
+static int modifier(int code)
+{
+	switch (code) {
+	case KEY_LEFTCTRL: case KEY_RIGHTCTRL:
+	case KEY_LEFTSHIFT: case KEY_RIGHTSHIFT:
+	case KEY_LEFTALT: case KEY_RIGHTALT:
+	case KEY_LEFTMETA: case KEY_RIGHTMETA:
+		return 1;
+	}
+	return 0;
+}
+
 static void read_keyboard(void)
 {
 	struct input_event events[64];
@@ -193,6 +205,13 @@ static void read_keyboard(void)
 		return;
 	}
 	for (size_t i = 0; i < (size_t)got / sizeof events[0]; i++) {
+		/* A modifier alone is not another key: a combination always has a
+		 * key that is not a modifier. keyd itself sends modifiers during a
+		 * hold. The layer is "overlay:M", so it sends Super, and at the
+		 * release it taps Ctrl, so that GNOME does not open the overview. */
+		int code = events[i].code;
+		if (modifier(code))
+			continue;
 		if (events[i].type == EV_KEY && events[i].value == 1 && held && !keyed) {
 			keyed = 1;
 			say("key\n");
