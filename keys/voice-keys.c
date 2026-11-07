@@ -8,7 +8,9 @@
  *   - `keyd listen`, which prints "+overlay" and "-overlay" when the layer of
  *     the launch key goes on and off;
  *   - the "keyd virtual keyboard" device, which shows each key that keyd
- *     sends. While the launch key is held alone, keyd sends only modifiers.
+ *     sends. While the launch key is held alone, keyd sends only modifiers;
+ *   - the mice and touchpads, only during a hold: with Super held, a click
+ *     or a drag is a combination too (GNOME moves a window with Super+drag).
  *
  * Each client on the socket receives one line per change:
  *
@@ -43,6 +45,7 @@
 
 #define KEYBOARD_NAME "keyd virtual keyboard"
 #define MAX_CLIENTS 4
+#define MAX_POINTERS 8
 #define RETRY_MS 2000
 
 static const char *layer = "overlay";
@@ -59,6 +62,8 @@ static char line[256];
 static size_t line_len;
 
 static int keyboard = -1;
+static int pointers[MAX_POINTERS];   /* open during a hold only */
+static int pointer_count;
 
 static int held;             /* the layer is on */
 static int keyed;            /* a key came during this hold */
@@ -76,10 +81,49 @@ static void say(const char *message)
 	}
 }
 
+static int has_button(int fd)
+{
+	unsigned long bits[KEY_MAX / (8 * sizeof(long)) + 1] = {0};
+	if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof bits), bits) < 0)
+		return 0;
+	return (bits[BTN_LEFT / (8 * sizeof(long))] >> (BTN_LEFT % (8 * sizeof(long)))) & 1;
+}
+
+static void open_pointers(void)
+{
+	DIR *dir = opendir("/dev/input");
+	if (!dir)
+		return;
+	struct dirent *entry;
+	while ((entry = readdir(dir)) && pointer_count < MAX_POINTERS) {
+		if (strncmp(entry->d_name, "event", 5) != 0)
+			continue;
+		char path[300];
+		snprintf(path, sizeof path, "/dev/input/%s", entry->d_name);
+		int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+		if (fd < 0)
+			continue;
+		char name[256] = "";
+		ioctl(fd, EVIOCGNAME(sizeof name), name);
+		if (strcmp(name, KEYBOARD_NAME) != 0 && has_button(fd))
+			pointers[pointer_count++] = fd;
+		else
+			close(fd);
+	}
+	closedir(dir);
+}
+
+static void close_pointers(void)
+{
+	while (pointer_count > 0)
+		close(pointers[--pointer_count]);
+}
+
 static void release(void)
 {
 	if (held) {
 		held = 0;
+		close_pointers();
 		say("up\n");
 	}
 }
@@ -94,6 +138,7 @@ static void on_listen_line(const char *text)
 			held = 1;
 			keyed = 0;
 			say("down\n");
+			open_pointers();
 		} else if (text[0] == '-') {
 			release();
 		}
@@ -213,6 +258,29 @@ static void read_keyboard(void)
 		if (modifier(code))
 			continue;
 		if (events[i].type == EV_KEY && events[i].value == 1 && held && !keyed) {
+			keyed = 1;
+			say("key\n");
+		}
+	}
+}
+
+/* A mouse button during a hold. Touch and tool events of a touchpad are no
+ * click; its buttons are. */
+static void read_pointer(int i)
+{
+	struct input_event events[64];
+	ssize_t got = read(pointers[i], events, sizeof events);
+	if (got <= 0) {
+		if (got < 0 && errno == EAGAIN)
+			return;
+		close(pointers[i]);
+		pointers[i] = pointers[--pointer_count];
+		return;
+	}
+	for (size_t j = 0; j < (size_t)got / sizeof events[0]; j++) {
+		int code = events[j].code;
+		if (events[j].type == EV_KEY && events[j].value == 1 &&
+		    code >= BTN_LEFT && code <= BTN_TASK && held && !keyed) {
 			keyed = 1;
 			say("key\n");
 		}
@@ -345,26 +413,36 @@ int main(int argc, char **argv)
 			retry_at = now_ms() + RETRY_MS;
 		}
 
-		struct pollfd fds[3 + MAX_CLIENTS];
+		struct pollfd fds[3 + MAX_CLIENTS + MAX_POINTERS];
 		int n = 0;
 		fds[n++] = (struct pollfd){.fd = server, .events = POLLIN};
 		fds[n++] = (struct pollfd){.fd = listen_fd, .events = POLLIN};
 		fds[n++] = (struct pollfd){.fd = keyboard, .events = POLLIN};
 		for (int i = 0; i < MAX_CLIENTS; i++)
 			fds[n++] = (struct pollfd){.fd = clients[i], .events = POLLIN};
+		int pointers_polled = pointer_count;
+		for (int i = 0; i < pointers_polled; i++)
+			fds[n++] = (struct pollfd){.fd = pointers[i], .events = POLLIN};
 
 		int missing = listen_fd < 0 || keyboard < 0;
 		if (poll(fds, n, missing ? RETRY_MS : -1) < 0 && errno != EINTR)
 			return 1;
 
-		if (fds[1].revents)
-			read_listen();
+		/* The pointers first: reading the layer can close them. Backwards,
+		 * because a closed pointer takes the place of the last one. */
+		for (int i = pointers_polled - 1; i >= 0; i--)
+			if (fds[3 + MAX_CLIENTS + i].revents && i < pointer_count)
+				read_pointer(i);
 		if (fds[2].revents)
 			read_keyboard();
-		if (fds[0].revents)
-			accept_client();
+		if (fds[1].revents)
+			read_listen();
+		/* The clients before a new one: it may take the slot of one that
+		 * closed, and the result of poll() is for the old one. */
 		for (int i = 0; i < MAX_CLIENTS; i++)
 			if (fds[3 + i].revents && clients[i] >= 0)
 				read_client(i);
+		if (fds[0].revents)
+			accept_client();
 	}
 }

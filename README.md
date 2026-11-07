@@ -26,9 +26,12 @@ An X11 session does not work.
 3. Release the key. The text goes into the focused field about half a second
    later. The microphone runs 0.3 s longer, so your last word is not cut off.
 
-To cancel, press any other key while you hold Super, except Shift, Ctrl and
-Alt. Nothing is written. Because Super is held, that key also does what Super
-plus that key does, so choose one without a shortcut, such as Escape.
+To cancel, press any other key or a mouse button while you hold Super, except
+Shift, Ctrl and Alt. Nothing is written. Because Super is held, that key also
+does what Super plus that key does, so choose one without a shortcut, such as
+Escape. A drag with Super, which moves a window in GNOME, is no dictation
+either. A tap on a touchpad does not count as a click here, so press the
+touchpad down.
 
 Nothing reaches the field while you hold the key. A text that is ready while
 you hold Super for the next dictation waits until you release it.
@@ -46,7 +49,8 @@ keyboard -> keyd -> voice-keys (system service) -> voice (your session) -> clipb
 - **keyd** owns the keyboard. The Super key is `overload(overlay, leftmeta)`:
   held, it switches to the overlay layer; tapped, it sends Super.
 - **voice-keys** is a small C program. It watches the layer through
-  `keyd listen` and the keys that keyd sends. It tells your session only
+  `keyd listen` and the keys that keyd sends. During a hold, it also watches
+  the mouse buttons. It tells your session only
   `down`, `key` (another key during this hold, not a modifier) and `up`. It runs as a
   throwaway system user with the groups `keyd` and `input`, and no other rights.
 - **voice** decides. A hold of 300 ms with no other key is a dictation; any
