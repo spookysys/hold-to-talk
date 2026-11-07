@@ -88,4 +88,4 @@ uv run pytest
 
 ## License
 
-0BSD: use it as you like. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

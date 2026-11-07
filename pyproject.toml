@@ -3,7 +3,7 @@ name = "voice"
 version = "0.1.0"
 description = "Hold the launch key and speak; the text goes into the focused field."
 requires-python = ">=3.13"
-license = "0BSD"
+license = "MIT"
 dependencies = [
     "numpy==2.4.6",
     "sherpa-onnx==2.0.1",
