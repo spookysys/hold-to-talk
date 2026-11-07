@@ -41,17 +41,44 @@ def write(text: str, primary: bool) -> bool:
     return process.returncode == 0
 
 
+# The user's own clipboard texts, saved before the first paste of a series.
+# A paste soon after another must not save our own text as the user's, and the
+# restore of the first paste must not come before the application reads the
+# second one. So one restore serves the series and moves later with each paste.
+_lock = threading.Lock()
+_saved: dict[bool, str | None] = {}
+_restore: threading.Timer | None = None
+
+
 def insert(text: str, paste) -> bool:
-    """Paste `text` into the focused field; `paste` sends the chord."""
-    old = {primary: read(primary) for primary in (False, True)}
-    if not all([write(text, False), write(text, True)]):
-        return False
-    paste()
-
-    def restore() -> None:
-        for primary, value in old.items():
-            if value is not None:
-                write(value, primary)
-
-    threading.Timer(RESTORE_AFTER_S, restore).start()
+    """Paste `text` into the focused field; `paste` sends the chord and says if it could."""
+    global _saved, _restore
+    with _lock:
+        if _restore is not None:
+            _restore.cancel()
+        else:
+            _saved = {primary: read(primary) for primary in (False, True)}
+        if not all([write(text, False), write(text, True)]):
+            _restore_now()
+            return False
+        if not paste():
+            _restore_now()
+            return False
+        timer = threading.Timer(RESTORE_AFTER_S, lambda: _restore_later(timer))
+        _restore = timer
+        timer.start()
     return True
+
+
+def _restore_later(timer: threading.Timer) -> None:
+    with _lock:
+        if timer is _restore:       # else a newer paste canceled it too late
+            _restore_now()
+
+
+def _restore_now() -> None:
+    global _restore
+    _restore = None
+    for primary, value in _saved.items():
+        if value is not None:
+            write(value, primary)

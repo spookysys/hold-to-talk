@@ -23,6 +23,7 @@ import os
 import queue
 import threading
 import time
+import traceback
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,7 +84,7 @@ class Engine(threading.Thread):
         # The user's languages. A text in another script is decoded again in each.
         self.languages = languages or []
         self.on_result = on_result          # called in this thread
-        self.on_loaded = on_loaded          # called in this thread when the model is ready
+        self.on_loaded = on_loaded          # called in this thread: True when ready, False on error
         self.marker = marker                # a file that exists while the model is loaded
         self.jobs: queue.Queue = queue.Queue()
         self.dropped: set[int] = set()      # canceled dictations
@@ -121,26 +122,39 @@ class Engine(threading.Thread):
     def run(self) -> None:
         while True:
             job, dictation, audio = self.jobs.get()
-            if job == "load":
-                self._load()
-            elif job == "unload":
-                self._unload()
-            elif dictation in self.dropped:
-                self.stream = None
-            elif job == "begin":
-                self._begin(dictation, audio)
-            elif job == "feed":
-                self.audio += audio
-                self._feed(dictation, pcm(audio))
-            elif job == "end":
-                self._feed(dictation, np.zeros(int(TAIL_S * RATE), np.float32), quiet=True)
-                self.stream.input_finished()
-                self._decode()
-                wrong = foreign(self.text) or (not self.text and speechlike(pcm(bytes(self.audio))))
-                if wrong and self.languages:
-                    self.text = self._again()
-                self.on_result(Result(dictation, self.text, final=True))
+            try:
+                self._do(job, dictation, audio)
+            except Exception:            # the thread must live on; the daemon needs an answer
+                traceback.print_exc()
                 self.stream, self.audio = None, bytearray()
+                if job == "load":
+                    self.recognizer = None
+                    self.on_loaded(False)
+                elif job in ("begin", "feed", "end"):
+                    self.dropped.add(dictation)
+                    self.on_result(Result(dictation, "", final=True))
+
+    def _do(self, job: str, dictation: int, audio: bytes) -> None:
+        if job == "load":
+            self._load()
+        elif job == "unload":
+            self._unload()
+        elif dictation in self.dropped:
+            self.stream, self.audio = None, bytearray()
+        elif job == "begin":
+            self._begin(dictation, audio)
+        elif job == "feed":
+            self.audio += audio
+            self._feed(dictation, pcm(audio))
+        elif job == "end":
+            self._feed(dictation, np.zeros(int(TAIL_S * RATE), np.float32), quiet=True)
+            self.stream.input_finished()
+            self._decode()
+            wrong = foreign(self.text) or (not self.text and speechlike(pcm(bytes(self.audio))))
+            if wrong and self.languages:
+                self.text = self._again()
+            self.on_result(Result(dictation, self.text, final=True))
+            self.stream, self.audio = None, bytearray()
 
     def _begin(self, dictation: int, audio: bytes) -> None:
         self.stream = self.recognizer.create_stream()
@@ -188,7 +202,7 @@ class Engine(threading.Thread):
 
     def _load(self) -> None:
         if self.recognizer is not None:
-            self.on_loaded()
+            self.on_loaded(True)
             return
         import sherpa_onnx
 
@@ -204,7 +218,7 @@ class Engine(threading.Thread):
         if self.marker:
             self.marker.touch()
         print(f"voice: model ready in {self.load_s * 1000:.0f} ms", flush=True)
-        self.on_loaded()
+        self.on_loaded(True)
 
     def _unload(self) -> None:
         if self.recognizer is not None:

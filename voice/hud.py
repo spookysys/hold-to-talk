@@ -36,6 +36,7 @@ class Hud:
     def __init__(self) -> None:
         self.process: subprocess.Popen | None = None
         self.shown = False
+        self.failed = False      # the box could not start; voice works on without it
 
     def show(self, state: str, text: str = "", **extra) -> None:
         self.shown = True
@@ -63,6 +64,13 @@ class Hud:
 
     def _send(self, message: dict) -> None:
         if not os.environ.get("DISPLAY"):
+            return
+        if self.failed:
+            return
+        if self.process is not None and self.process.poll() not in (None, 0):
+            self.failed = True
+            print("voice: the caption box ended with an error; voice goes on without it",
+                  flush=True)
             return
         if self.process is None or self.process.poll() is not None:
             if message.get("state") is None:
@@ -114,6 +122,14 @@ def run() -> int:
         root.geometry(f"{width}x{frame.winfo_reqheight()}"
                       f"+{(screen_w - width) // 2}+{int(screen_h * 0.06)}")
 
+    def hide() -> None:
+        root.withdraw()
+        # Tk shows a window at its last size first, so the next box would open
+        # tall and then shrink. Make it one line now; it grows with the text.
+        body.configure(height=1)
+        root.update_idletasks()
+        root.geometry(f"{width}x{frame.winfo_reqheight()}")
+
     loading = {"since": 0.0, "eta": 1.0, "active": False}
     hiding = [None]          # the timer that hides the "ready" box
 
@@ -138,7 +154,7 @@ def run() -> int:
             hiding[0] = None
         loading["active"] = state == "loading"
         if state is None:
-            root.withdraw()
+            hide()
             return
         text = message.get("text") or ""
         header.configure(text=f"voice: {state}")
@@ -151,7 +167,7 @@ def run() -> int:
         elif state == "ready":
             header.configure(text="voice: ready, hold the key and speak")
             meter.coords(bar, 0, 0, meter.winfo_width(), bar_h)
-            hiding[0] = root.after(1500, root.withdraw)
+            hiding[0] = root.after(1500, hide)
         if state in ("loading", "ready"):   # only the header and the bar
             body.pack_forget()
         elif not body.winfo_manager():

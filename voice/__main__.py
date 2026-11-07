@@ -95,7 +95,7 @@ def transcribe(path: str) -> int:
         data = w.readframes(w.getnframes())
     results: queue.Queue = queue.Queue()
     engine = Engine(config.model, config.threads, config.language, results.put,
-                    on_loaded=lambda: None, languages=config.languages)
+                    on_loaded=lambda ok: None, languages=config.languages)
     engine.start()
     engine.load()
     engine.begin(1, b"")
