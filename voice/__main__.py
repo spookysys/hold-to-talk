@@ -94,14 +94,21 @@ def transcribe(path: str) -> int:
             return 2
         data = w.readframes(w.getnframes())
     results: queue.Queue = queue.Queue()
+    loaded: queue.Queue = queue.Queue()
     engine = Engine(config.model, config.threads, config.language, results.put,
-                    on_loaded=lambda ok: None, languages=config.languages)
+                    on_loaded=loaded.put, languages=config.languages)
     engine.start()
     engine.load()
+    if not loaded.get():
+        print("voice: the model failed to load", file=sys.stderr)
+        return 1
     engine.begin(1, b"")
     piece = RATE // 10 * 2          # 100 ms, as the microphone delivers it
     for start in range(0, len(data), piece):
         engine.feed(1, data[start:start + piece])
+    # As at a release: the audio so far is decoded, only the end is left.
+    while not engine.jobs.empty():
+        time.sleep(0.01)
     engine.end(1)
     started = time.monotonic()
     while not (result := results.get()).final:
