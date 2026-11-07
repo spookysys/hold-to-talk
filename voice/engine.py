@@ -6,10 +6,9 @@ release only the last piece is left, so the text is ready a few hundred
 milliseconds later. A transducer writes text only for sounds it hears, so it
 does not invent text for silence.
 
-The model takes about 1 GB of RAM and a few seconds to load. It loads when a
-hold becomes a dictation; the audio waits in the queue meanwhile and the model
-catches up, at about twice the speed of speech on a small laptop. The daemon
-frees the model after some idle minutes.
+The model takes about 1 GB of RAM and a few seconds to load. The daemon asks
+for the load and frees the model after some idle minutes; a dictation begins
+only when the model is loaded.
 
 Measured on an Intel i3-1215U: two threads are the fastest. More threads wait
 for the slow cores of this CPU.
@@ -55,16 +54,18 @@ def foreign(text: str) -> bool:
 
 
 def speechlike(samples: np.ndarray) -> bool:
-    """True when the loudest 20 ms are at least 20 dB above the quiet tenth.
+    """True when at least 200 ms are 20 dB above the quiet tenth.
 
     A wrong language guess can also give no text at all; then the audio
-    shows whether there was something to hear.
+    shows whether there was something to hear. A click of the key is loud
+    for a few milliseconds only, so it does not count as speech.
     """
-    frames = len(samples) // 320
+    frames = len(samples) // 320                     # of 20 ms
     if frames < 10:
         return False
     rms = np.sqrt((samples[: frames * 320].reshape(frames, 320) ** 2).mean(axis=1))
-    return float(rms.max()) > max(10 * float(np.percentile(rms, 10)), 1e-3)
+    loud = rms > max(10 * float(np.percentile(rms, 10)), 1e-3)
+    return int(loud.sum()) >= 10
 
 
 def pcm(data: bytes) -> np.ndarray:
@@ -73,7 +74,7 @@ def pcm(data: bytes) -> np.ndarray:
 
 
 class Engine(threading.Thread):
-    def __init__(self, model: str, threads: int, language: str, on_result,
+    def __init__(self, model: str, threads: int, language: str, on_result, on_loaded,
                  marker: Path | None = None, languages: list[str] | None = None):
         super().__init__(daemon=True, name="engine")
         self.model_dir = model
@@ -82,6 +83,7 @@ class Engine(threading.Thread):
         # The user's languages. A text in another script is decoded again in each.
         self.languages = languages or []
         self.on_result = on_result          # called in this thread
+        self.on_loaded = on_loaded          # called in this thread when the model is ready
         self.marker = marker                # a file that exists while the model is loaded
         self.jobs: queue.Queue = queue.Queue()
         self.dropped: set[int] = set()      # canceled dictations
@@ -91,7 +93,11 @@ class Engine(threading.Thread):
         self.audio = bytearray()            # of the dictation in progress, for a second decode
         self.load_s = 3.5                   # how long the last load took; for the loading bar
 
-    # Calls from the daemon thread. Each dictation is begin, feed..., end or drop.
+    # Calls from the daemon thread. Each dictation is begin, feed..., end or drop,
+    # after a load.
+
+    def load(self) -> None:
+        self.jobs.put(("load", 0, b""))
 
     def begin(self, dictation: int, audio: bytes) -> None:
         """Start a dictation with the audio recorded before it began."""
@@ -115,7 +121,9 @@ class Engine(threading.Thread):
     def run(self) -> None:
         while True:
             job, dictation, audio = self.jobs.get()
-            if job == "unload":
+            if job == "load":
+                self._load()
+            elif job == "unload":
                 self._unload()
             elif dictation in self.dropped:
                 self.stream = None
@@ -135,14 +143,10 @@ class Engine(threading.Thread):
                 self.stream, self.audio = None, bytearray()
 
     def _begin(self, dictation: int, audio: bytes) -> None:
-        if self.recognizer is None:
-            self._load()
         self.stream = self.recognizer.create_stream()
         self.stream.set_option("language", self.language)
         self.text, self.audio = "", bytearray(audio)
-        self.stream.accept_waveform(RATE, pcm(audio))
-        self._decode()
-        self.on_result(Result(dictation, self.text, final=False))   # the model is ready
+        self._feed(dictation, pcm(audio))
 
     def _feed(self, dictation: int, samples: np.ndarray, quiet: bool = False) -> None:
         if self.stream is None or not len(samples):
@@ -160,15 +164,19 @@ class Engine(threading.Thread):
 
     def _again(self) -> str:
         """Decode the dictation again in each of the user's languages; keep the surest text."""
-        started, found = time.monotonic(), []
+        started, streams = time.monotonic(), []
+        samples = np.concatenate([pcm(bytes(self.audio)), np.zeros(int(TAIL_S * RATE), np.float32)])
         for language in self.languages:
             stream = self.recognizer.create_stream()
             stream.set_option("language", language)
-            stream.accept_waveform(RATE, pcm(bytes(self.audio)))
-            stream.accept_waveform(RATE, np.zeros(int(TAIL_S * RATE), np.float32))
+            stream.accept_waveform(RATE, samples)
             stream.input_finished()
-            while self.recognizer.is_ready(stream):
-                self.recognizer.decode_stream(stream)
+            streams.append(stream)
+        # Together in one batch: about 20 % faster than one after the other.
+        while ready := [s for s in streams if self.recognizer.is_ready(s)]:
+            self.recognizer.decode_streams(ready)
+        found = []
+        for language, stream in zip(self.languages, streams):
             result = self.recognizer.get_result_all(stream)
             score = float(np.mean(result.ys_probs)) if len(result.ys_probs) else -np.inf
             found.append((score, language, " ".join(result.text.split())))
@@ -179,6 +187,9 @@ class Engine(threading.Thread):
         return text
 
     def _load(self) -> None:
+        if self.recognizer is not None:
+            self.on_loaded()
+            return
         import sherpa_onnx
 
         def one(pattern: str) -> str:
@@ -193,6 +204,7 @@ class Engine(threading.Thread):
         if self.marker:
             self.marker.touch()
         print(f"voice: model ready in {self.load_s * 1000:.0f} ms", flush=True)
+        self.on_loaded()
 
     def _unload(self) -> None:
         if self.recognizer is not None:

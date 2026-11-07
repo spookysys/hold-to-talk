@@ -43,7 +43,7 @@ Measured on an Intel i3-1215U with 8 GB RAM:
 |---|---|
 | idle | 0 % CPU, about 35 MB RAM |
 | dictation | about half of 2 CPU threads while you speak; about 1 GB RAM |
-| first dictation after a break | the model loads in about 3.5 s; the text then catches up |
+| first hold after a break | loads the model in about 3.5 s and records nothing; the box says when to hold again |
 | after the release | 0.1 to 0.3 s until the text is in the field |
 | after 30 idle minutes | the model is freed, and the RAM with it |
 

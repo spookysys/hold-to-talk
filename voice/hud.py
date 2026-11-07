@@ -11,7 +11,8 @@ uses the standard library only.
 
 The parent sends one JSON line per change:
     {"state": "listening", "text": "..."}
-    {"state": "loading", "eta": 3.5}   the model loads; only the bar shows, 90 % at eta seconds
+    {"state": "loading", "eta": 3.5, "elapsed": 0}   only the bar, at 90 % after eta seconds
+    {"state": "ready"}   the model is loaded; the box hides by itself after a moment
     {"level": 0.6}       microphone loudness, 0 to 1
     {"state": null}      hide
 The child starts at the first dictation and ends when the model is freed.
@@ -114,6 +115,7 @@ def run() -> int:
                       f"+{(screen_w - width) // 2}+{int(screen_h * 0.06)}")
 
     loading = {"since": 0.0, "eta": 1.0, "active": False}
+    hiding = [None]          # the timer that hides the "ready" box
 
     def tick() -> None:
         if not loading["active"]:
@@ -131,18 +133,26 @@ def run() -> int:
             meter.coords(bar, 0, 0, int(meter.winfo_width() * message["level"]), bar_h)
             return
         state = message.get("state")
+        if hiding[0]:
+            root.after_cancel(hiding[0])
+            hiding[0] = None
+        loading["active"] = state == "loading"
         if state is None:
-            loading["active"] = False
             root.withdraw()
             return
         text = message.get("text") or ""
         header.configure(text=f"voice: {state}")
         if state != "listening":
             meter.coords(bar, 0, 0, 0, bar_h)
-        loading["active"] = state == "loading"
-        if loading["active"]:             # only the header and the bar until the model is ready
-            loading.update(since=time.monotonic(), eta=max(message.get("eta", 3.5), 0.5))
+        if state == "loading":
+            eta = max(message.get("eta", 3.5), 0.5)
+            loading.update(since=time.monotonic() - message.get("elapsed", 0), eta=eta)
             tick()
+        elif state == "ready":
+            header.configure(text="voice: ready, hold the key and speak")
+            meter.coords(bar, 0, 0, meter.winfo_width(), bar_h)
+            hiding[0] = root.after(1500, root.withdraw)
+        if state in ("loading", "ready"):   # only the header and the bar
             body.pack_forget()
         elif not body.winfo_manager():
             body.pack(fill="x", padx=2 * pad, pady=(0, pad))

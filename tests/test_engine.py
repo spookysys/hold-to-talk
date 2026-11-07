@@ -21,3 +21,5 @@ def test_speech_is_loud_against_its_quiet_parts():
     assert speechlike(np.concatenate([room, voice, room]))
     assert not speechlike(np.concatenate([room, room]))
     assert not speechlike(np.zeros(100))
+    click = np.concatenate([room[:16000], 0.5 * np.ones(320), room[:16000]])   # 20 ms, the key
+    assert not speechlike(click)

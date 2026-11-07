@@ -95,8 +95,9 @@ def transcribe(path: str) -> int:
         data = w.readframes(w.getnframes())
     results: queue.Queue = queue.Queue()
     engine = Engine(config.model, config.threads, config.language, results.put,
-                    languages=config.languages)
+                    on_loaded=lambda: None, languages=config.languages)
     engine.start()
+    engine.load()
     engine.begin(1, b"")
     piece = RATE // 10 * 2          # 100 ms, as the microphone delivers it
     for start in range(0, len(data), piece):
