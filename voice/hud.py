@@ -124,11 +124,14 @@ def run() -> int:
 
     def hide() -> None:
         root.withdraw()
-        # Tk shows a window at its last size first, so the next box would open
-        # tall and then shrink. Make it one line now; it grows with the text.
+
+    def open_small() -> None:
+        # Tk shows a window at its last size first, so the box would open tall
+        # and then shrink. It opens at one line and grows with the text.
         body.configure(height=1)
         root.update_idletasks()
-        root.geometry(f"{width}x{frame.winfo_reqheight()}")
+        root.geometry(f"{width}x{frame.winfo_reqheight()}"
+                      f"+{(screen_w - width) // 2}+{int(screen_h * 0.06)}")
 
     loading = {"since": 0.0, "eta": 1.0, "active": False}
     hiding = [None]          # the timer that hides the "ready" box
@@ -180,6 +183,8 @@ def run() -> int:
             body.insert("end", "speak now", "hint")
         body.see("end")
         body.configure(state="disabled")
+        if root.state() == "withdrawn":
+            open_small()
         root.deiconify()       # Tk counts the wrapped lines only of a visible window
         place()
 
