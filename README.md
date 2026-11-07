@@ -1,4 +1,4 @@
-# voice
+# hold-to-talk
 
 Hold the launch key and speak. When you release the key, the text goes into
 the field that has the focus: an editor, a browser, a terminal.
@@ -7,7 +7,11 @@ The launch key keeps all its other functions. A tap still opens the overview,
 and launch plus another key still works as before, also when you press the
 other key slowly. voice adds no delay to any key.
 
-It runs on Linux with GNOME on Wayland and [keyd](https://github.com/rvaiya/keyd).
+It runs on Linux with Wayland and [keyd](https://github.com/rvaiya/keyd).
+The command is `voice`. It is tested on GNOME. Other Wayland desktops
+probably work, but there the caption box could take the focus, and then the
+text would go into the box. An X11 session does not work.
+
 Speech recognition is local and streaming:
 [Nemotron 3.5 ASR streaming](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
 through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). It detects the
@@ -81,3 +85,7 @@ model now), `status`, `log`, and `transcribe FILE.wav` for tests.
 ```
 uv run pytest
 ```
+
+## License
+
+0BSD: use it as you like. See [LICENSE](LICENSE).
