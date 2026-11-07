@@ -1,21 +1,35 @@
 # hold-to-talk
 
-Hold the launch key and speak. When you release the key, the text goes into
-the field that has the focus: an editor, a browser, a terminal.
+Dictation for Linux. Hold the Super key (the Windows key) and speak. When you
+release it, the text goes into the field that has the focus: an editor, a
+browser, a terminal.
 
-The launch key keeps all its other functions. A tap still opens the overview,
-and launch plus another key still works as before, also when you press the
-other key slowly. voice adds no delay to any key.
-
-It runs on Linux with Wayland and [keyd](https://github.com/rvaiya/keyd).
-The command is `voice`. It is tested on GNOME. Other Wayland desktops
-probably work, but there the caption box could take the focus, and then the
-text would go into the box. An X11 session does not work.
-
-Speech recognition is local and streaming:
-[Nemotron 3.5 ASR streaming](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
+Speech recognition runs on your computer. No audio and no text leave it. It
+uses [Nemotron 3.5 ASR streaming](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
 through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). It detects the
 language by itself; German and English are tested.
+
+The Super key keeps all its other functions. A tap still opens the overview,
+and Super plus another key still works as before, also when you press the
+other key slowly. hold-to-talk adds no delay to any key.
+
+It runs on Linux with Wayland and [keyd](https://github.com/rvaiya/keyd).
+It is tested on GNOME. Other Wayland desktops probably work, but there the
+caption box could take the focus, and then the text would go into the box.
+An X11 session does not work.
+
+## Use
+
+1. Hold the left Super key. After 0.3 s, a caption box opens at the top of
+   the screen.
+2. Speak. The box shows the text while you speak.
+3. Release the key. The text goes into the focused field.
+
+To cancel, press any other key while you hold Super. Nothing is written.
+
+After a break of 30 minutes, the model is not in memory. Then the first hold
+only loads it, in about 3.5 s, and records nothing. The box shows a loading
+bar and tells you when to hold the key again.
 
 ## How it works
 
@@ -23,8 +37,8 @@ language by itself; German and English are tested.
 keyboard -> keyd -> voice-keys (system service) -> voice (your session) -> clipboard + Shift+Insert
 ```
 
-- **keyd** owns the keyboard. The launch key is `overload(overlay, leftmeta)`:
-  held, it switches to the overlay layer; tapped, it sends the launch key.
+- **keyd** owns the keyboard. The Super key is `overload(overlay, leftmeta)`:
+  held, it switches to the overlay layer; tapped, it sends Super.
 - **voice-keys** is a small C program. It watches the layer through
   `keyd listen` and the keys that keyd sends. It tells your session only
   `down`, `key` (another key during this hold) and `up`. It runs as a
@@ -53,15 +67,55 @@ Measured on an Intel i3-1215U with 8 GB RAM:
 
 ## Install
 
-You need keyd, PipeWire (`pw-record`), `wl-clipboard`, `uv`, a C compiler and `make`.
+You need:
+
+- keyd, with the left Super key set up as below
+- PipeWire with `pw-record` (Fedora: `pipewire-utils`)
+- `wl-clipboard`
+- Python's tkinter for the system Python (Fedora: `python3-tkinter`)
+- `uv`, a C compiler and `make`
+
+keyd must make the left Super key switch to a layer named `overlay` while you
+hold it. The install does not add this. Put it in `/etc/keyd/default.conf`:
+
+```ini
+[ids]
+*
+
+[main]
+leftmeta = overload(overlay, leftmeta)
+
+[overlay]
+```
+
+Then run, from this directory:
 
 ```
 ./install.sh                              # program, model, user service
-pkexec ./install-system.sh "$(id -un)"    # helper, keyd setting (root)
+pkexec ./install-system.sh "$(id -un)"    # key helper, keyd setting (root)
 ```
 
-`install-system.sh` saves the old keyd configuration as
-`/etc/keyd/default.conf.before-voice`.
+`install.sh` downloads the model, about 650 MB, to
+`~/.local/share/voice/models`. `install-system.sh` adds
+`overload_tap_timeout = 300` to the keyd configuration, and first saves the
+old file as `/etc/keyd/default.conf.before-voice`.
+
+The service starts by itself each time you log in. The command to control it
+is `voice` (see [Commands](#commands)).
+
+### Uninstall
+
+```
+systemctl --user disable --now voice.service
+rm ~/.config/systemd/user/voice.service
+uv tool uninstall voice
+rm -r ~/.local/share/voice
+sudo systemctl disable --now "voice-keys@$(id -un).socket"
+sudo rm /usr/local/libexec/voice-keys /etc/systemd/system/voice-keys@.socket /etc/systemd/system/voice-keys@.service
+```
+
+To undo the keyd setting, remove the line `overload_tap_timeout = 300` from
+`/etc/keyd/default.conf`, then run `sudo keyd reload`.
 
 ## Settings
 
