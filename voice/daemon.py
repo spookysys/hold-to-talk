@@ -15,8 +15,10 @@ import selectors
 import signal
 import socket
 import subprocess
+import threading
 import time
 import tomllib
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -75,6 +77,10 @@ class Daemon:
         self.dictation = 0               # the newest dictation
         self.listening = False           # it still records
         self.active_since = 0.0
+        self.output_busy = False
+        self.paste_request: Future[str] | None = None
+        self.paste_sent = False
+        self.paste_at: float | None = None
         self.waiting: list[str] = []     # texts that are ready while the key is down
         self.stop_at: float | None = None   # the release came; the microphone runs until then
         self.writing: set[int] = set()   # dictations that wait for their final text
@@ -99,7 +105,7 @@ class Daemon:
         self.unload_at = 0.0                 # the loop frees the model at its next pass
         os.write(self.wake_w, b"u")          # and select() must return for that
 
-    # Events arrive in the engine thread; the loop handles them.
+    # Events arrive in worker threads; the loop handles them.
 
     def _post(self, function, *arguments) -> None:
         self.events.append((function, arguments))
@@ -116,6 +122,10 @@ class Daemon:
                 self._begin()
             if self.hold.state == H.ACTIVE and now - self.active_since > self.config.max_seconds:
                 self._act(self.hold.event("limit", now))
+            if self.paste_at is not None and now >= self.paste_at:
+                log("voice-keys did not confirm paste; check that the helper is up to date")
+                # Close this connection so a late reply cannot confirm a later paste.
+                self._disconnect_keys()
             if self.stop_at is not None and now >= self.stop_at:
                 self._stop()
             if self.unload_at is not None and now >= self.unload_at:
@@ -126,7 +136,9 @@ class Daemon:
                 self.engine.unload()
                 self.hud.close()
 
-            for key, _ in self.selector.select(self._timeout(time.monotonic())):
+            # Read key events before worker results from the same selector pass.
+            ready = self.selector.select(self._timeout(time.monotonic()))
+            for key, _ in sorted(ready, key=lambda item: item[0].data != "keys"):
                 if key.data == "keys":
                     self._read_keys()
                 elif key.data == "audio":
@@ -142,7 +154,7 @@ class Daemon:
                 or self.stop_at is not None)
 
     def _timeout(self, now: float) -> float | None:
-        times = [self.hold.deadline(), self.unload_at, self.stop_at]
+        times = [self.hold.deadline(), self.unload_at, self.stop_at, self.paste_at]
         if self.keys is None:
             times.append(self.connect_at)
         if self.hold.state == H.ACTIVE:
@@ -163,6 +175,7 @@ class Daemon:
             self.connect_at = time.monotonic() + 2
             return
         log("connected to voice-keys")
+        sock.setblocking(False)
         self.keys = sock
         self.keys_buffer = b""
         self.selector.register(sock, selectors.EVENT_READ, "keys")
@@ -172,33 +185,74 @@ class Daemon:
             return
         try:
             data = self.keys.recv(4096)
+        except BlockingIOError:
+            return
         except OSError:
             data = b""
         if not data:
-            log("voice-keys went away")
-            self.selector.unregister(self.keys)
-            self.keys.close()
-            self.keys = None
-            self.connect_at = time.monotonic() + 1
-            self._act(self.hold.event("lost", time.monotonic()))
-            self._write_waiting()
+            self._disconnect_keys()
             return
         self.keys_buffer += data
         *lines, self.keys_buffer = self.keys_buffer.split(b"\n")
         for line in lines:
             name = line.decode(errors="replace").strip()
-            if name in ("down", "key", "up"):
+            if name == "pasted":
+                self._paste_done("pasted")
+            elif name == "held":
+                self._paste_done("held")
+            elif name == "failed":
+                self._paste_done("failed")
+            elif name in ("down", "key", "up"):
                 self._act(self.hold.event(name, time.monotonic()))
+        self._send_paste()
         self._write_waiting()
 
-    def _paste(self) -> bool:
+    def _disconnect_keys(self) -> None:
+        if self.keys is not None:
+            log("voice-keys went away")
+            self.selector.unregister(self.keys)
+            self.keys.close()
+            self.keys = None
+        self.connect_at = time.monotonic() + 1
+        self._act(self.hold.event("lost", time.monotonic()))
+        self._paste_done("failed")
+        self._write_waiting()
+
+    def _paste(self) -> str:
+        """The output worker waits while the event loop processes keys."""
+        request: Future[str] = Future()
+        self._post(self._prepare_paste, request)
+        return request.result()
+
+    def _prepare_paste(self, request: Future[str]) -> None:
+        self.paste_request = request
+        # A key can arrive after select() returned the worker notification.
+        self._read_keys()
+        self._send_paste()
+
+    def _send_paste(self) -> None:
+        if self.paste_request is None or self.paste_sent:
+            return
         if self.keys is None:
-            return False
+            self._paste_done("failed")
+            return
+        if self.hold.state != H.IDLE:
+            self._paste_done("held")
+            return
         try:
             self.keys.sendall(b"paste\n")
         except OSError:
-            return False
-        return True
+            self._paste_done("failed")
+            return
+        self.paste_sent = True
+        self.paste_at = time.monotonic() + 3
+
+    def _paste_done(self, result: str) -> None:
+        self.paste_sent = False
+        self.paste_at = None
+        request, self.paste_request = self.paste_request, None
+        if request is not None:
+            request.set_result(result)
 
     # Actions of the hold.
 
@@ -329,12 +383,18 @@ class Daemon:
     def _text(self, result: Result) -> None:
         if result.dictation == self.dictation:
             self.text = result.text
-            if self.listening and self.stop_at is None:
+            if self.listening and self.stop_at is None and not result.final:
                 self.hud.show("listening", result.text)
             elif not result.final and (self.stop_at is not None or result.dictation in self.writing):
                 self.hud.show("writing", result.text)
         if not result.final:
             return
+        if result.dictation == self.dictation and self.listening:
+            # The engine can fail before release. Its final result ends recording.
+            self.stop_at = None
+            self._stop_recorder()
+            self.listening = False
+            self.hold.event("key", time.monotonic())
         self.writing.discard(result.dictation)
         if result.dictation == self.dictation and not self.listening:
             self.hud.hide()
@@ -354,14 +414,31 @@ class Daemon:
         A paste while the key is down would reach the field before the
         release, and keyd would send it with Super held.
         """
-        if self.hold.state != H.IDLE:
+        if self.hold.state != H.IDLE or self.output_busy or not self.waiting:
             return
-        while self.waiting:
-            text = self.waiting.pop(0)
-            if output.insert(text + " ", self._paste):
-                log(f"wrote {len(text)} characters into the focused field")
-            else:
-                log("the clipboard or voice-keys failed, so nothing is written")
+        text = " ".join(self.waiting)
+        self.waiting.clear()
+        self.output_busy = True
+        threading.Thread(target=self._insert, args=(text,), daemon=True,
+                         name="output").start()
+
+    def _insert(self, text: str) -> None:
+        try:
+            result = output.insert(text + " ", self._paste)
+        except Exception as error:
+            log(f"paste failed: {error}")
+            result = "failed"
+        self._post(self._inserted, result, text)
+
+    def _inserted(self, result: str, text: str) -> None:
+        self.output_busy = False
+        if result == "held":
+            self.waiting.insert(0, text)
+        elif result == "pasted":
+            log(f"sent {len(text)} characters to the focused field")
+        else:
+            log("the clipboard or voice-keys failed; paste was not confirmed")
+        self._write_waiting()
 
     def _schedule_unload(self) -> None:
         if not self.writing and not self.listening:

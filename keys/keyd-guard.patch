@@ -1,0 +1,65 @@
+--- a/src/keyd.h
++++ b/src/keyd.h
+@@ -84,0 +85,2 @@
++		IPC_BUSY,
++		IPC_MACRO_UNLESS,
+--- a/src/keyd.c
++++ b/src/keyd.c
+@@ -35,3 +35 @@
+-	return msg.type == IPC_FAIL;
+-
+-	return type == IPC_FAIL;
++	return msg.type == IPC_BUSY ? 2 : msg.type == IPC_FAIL;
+@@ -147,0 +146,16 @@
++/* Execute only if the named layer is inactive in every configuration. */
++static int cmd_do_unless(int argc, char *argv[])
++{
++	char buf[MAX_IPC_MESSAGE_SIZE];
++	if (argc < 3 || strlen(argv[1]) >= MAX_LAYER_NAME_LEN) {
++		fprintf(stderr, "usage: keyd do-unless LAYER EXPRESSION\n");
++		return 1;
++	}
++	size_t prefix = strlen(argv[1]) + 1;
++	memcpy(buf, argv[1], prefix - 1);
++	buf[prefix - 1] = '\n';
++	size_t sz = sizeof buf - prefix;
++	read_input(argc - 2, argv + 2, buf + prefix, &sz);
++	return ipc_exec(IPC_MACRO_UNLESS, buf, prefix + sz, 0);
++}
++
+@@ -228,0 +243 @@
++	{"do-unless", "", "", cmd_do_unless},
+--- a/src/daemon.c
++++ b/src/daemon.c
+@@ -421,0 +422,31 @@
++	case IPC_MACRO_UNLESS: {
++		char *expression = strchr(msg.data, '\n');
++		int found = 0;
++		if (!expression || msg.timeout) {
++			send_fail(con, "invalid guarded macro");
++			return;
++		}
++		*expression++ = 0;
++		for (ent = configs; ent; ent = ent->next) {
++			struct keyboard *kbd = ent->kbd;
++			for (size_t i = 0; i < kbd->config.nr_layers; i++) {
++				if (strcmp(kbd->config.layers[i].name, msg.data))
++					continue;
++				found = 1;
++				if (kbd->layer_state[i].active) {
++					struct ipc_message busy = {.type = IPC_BUSY};
++					xwrite(con, &busy, sizeof busy);
++					close(con);
++					return;
++				}
++			}
++		}
++		if (!found) {
++			send_fail(con, "unknown guard layer");
++			return;
++		}
++		msg.sz -= expression - msg.data;
++		memmove(msg.data, expression, msg.sz + 1);
++		/* No device event runs between this check and macro execution. */
++	}
++		/* fall through */

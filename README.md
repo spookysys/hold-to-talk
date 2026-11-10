@@ -62,8 +62,13 @@ keyboard -> keyd -> voice-keys (system service) -> voice (your session) -> clipb
 - The audio goes into the model in pieces as it arrives, and the text grows
   while you speak. A caption box shows it, with a level bar for the
   microphone. After the release, only the last piece is left.
-- The text goes into the clipboard and the primary selection, voice-keys makes
-  keyd send Shift+Insert, and the old clipboard text comes back after a second.
+- The text goes into the clipboard and the primary selection. voice-keys checks
+  the hold state and asks keyd to send Shift+Insert. After keyd completes,
+  another paste waits at least one second. The dictated text stays in both
+  selections until another copy replaces it. The old clipboard is not restored.
+- Clipboard work runs outside the key loop. Queued texts use one paste where
+  possible. Each paste finishes before the next one changes the clipboard.
+  A new hold during clipboard preparation defers the paste until release.
 
 ## Resources
 
@@ -82,6 +87,7 @@ Measured on an Intel i3-1215U with 8 GB RAM:
 You need:
 
 - keyd
+- curl and patch (to build the guarded keyd command)
 - PipeWire with `pw-record` (Fedora: `pipewire-utils`)
 - `wl-clipboard`
 - Python's tkinter for the system Python (Fedora: `python3-tkinter`)
@@ -114,8 +120,16 @@ Then run, from this directory:
 pkexec ./install-system.sh "$(id -un)"    # key helper, keyd setting (root)
 ```
 
+The install builds a fixed keyd release with a guarded paste command.
+The system install selects that binary through a service override and restarts
+keyd. It keeps the distribution's keyd binary and your key mappings.
+See [the key helper design](keys/README.md) for the guard and its checks.
+
 `install.sh` downloads the model, about 650 MB, to
 `~/.local/share/voice/models`.
+
+Install both parts together when you update. The daemon needs paste replies
+from the matching helper.
 
 The service starts by itself each time you log in. The command to control it
 is `voice` (see [Commands](#commands)).
@@ -129,6 +143,10 @@ uv tool uninstall voice
 rm -r ~/.local/share/voice
 sudo systemctl disable --now "voice-keys@$(id -un).socket"
 sudo rm /usr/local/libexec/voice-keys /etc/systemd/system/voice-keys@.socket /etc/systemd/system/voice-keys@.service
+sudo rm /etc/systemd/system/keyd.service.d/voice.conf
+sudo systemctl daemon-reload
+sudo systemctl restart keyd
+sudo rm /usr/local/libexec/voice-keyd /usr/local/share/voice/keyd.LICENSE
 ```
 
 If `/etc/keyd/default.conf` starts with `# Written by hold-to-talk`, remove

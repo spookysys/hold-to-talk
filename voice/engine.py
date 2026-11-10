@@ -151,7 +151,7 @@ class Engine(threading.Thread):
             self.stream.input_finished()
             self._decode()
             wrong = foreign(self.text) or (not self.text and speechlike(pcm(bytes(self.audio))))
-            if wrong and self.languages:
+            if self.language == "auto" and wrong and self.languages:
                 self.text = self._again()
             self.on_result(Result(dictation, self.text, final=True))
             self.stream, self.audio = None, bytearray()

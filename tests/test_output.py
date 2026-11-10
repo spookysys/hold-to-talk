@@ -1,32 +1,58 @@
-import time
+from unittest.mock import Mock
+
+import pytest
 
 from voice import output
 
 
-def clipboard(monkeypatch, start: str):
-    board = {False: start, True: start}
-    seen = []                       # what the application reads at each paste
-    monkeypatch.setattr(output, "read", lambda primary: board[primary])
+@pytest.fixture
+def clipboard(monkeypatch):
+    board = {False: "mine", True: "selection"}
     monkeypatch.setattr(output, "write", lambda text, primary: board.__setitem__(primary, text) or True)
-    monkeypatch.setattr(output, "RESTORE_AFTER_S", 0.05)
-    return board, lambda: seen.append(board[False]) or True, seen
+    monkeypatch.setattr(output.time, "sleep", lambda seconds: None)
+    return board
 
 
-def test_one_paste_restores_the_clipboard(monkeypatch):
-    board, paste, seen = clipboard(monkeypatch, "mine")
-    output.insert("hello", paste)
+def test_paste_keeps_text_until_the_application_reads_it(clipboard, monkeypatch):
+    seen = []
+    monkeypatch.setattr(output.time, "sleep", lambda seconds: seen.append(clipboard[False]))
+    assert output.insert("hello", lambda: "pasted") == "pasted"
     assert seen == ["hello"]
-    time.sleep(0.1)
-    assert board == {False: "mine", True: "mine"}
+    assert clipboard == {False: "hello", True: "hello"}
 
 
-def test_a_series_keeps_the_users_clipboard(monkeypatch):
-    board, paste, seen = clipboard(monkeypatch, "mine")
-    output.insert("one", paste)
-    time.sleep(0.03)                # the second paste comes before the restore
-    output.insert("two", paste)
-    time.sleep(0.03)                # the first restore would be due now
-    assert board[False] == "two"
-    time.sleep(0.1)
-    assert seen == ["one", "two"]
-    assert board == {False: "mine", True: "mine"}
+@pytest.mark.parametrize("primary", [False, True])
+def test_paste_preserves_a_new_copy(clipboard, monkeypatch, primary):
+    monkeypatch.setattr(output.time, "sleep", lambda seconds: clipboard.__setitem__(primary, "new copy"))
+    output.insert("hello", lambda: "pasted")
+    assert clipboard[primary] == "new copy"
+    assert clipboard[not primary] == "hello"
+
+
+@pytest.mark.parametrize("result", ["held", "failed"])
+def test_unsent_paste_leaves_text_available(clipboard, result):
+    assert output.insert("hello", lambda: result) == result
+    assert clipboard == {False: "hello", True: "hello"}
+
+
+def test_partial_clipboard_failure_does_not_send_paste(clipboard, monkeypatch):
+    def write(text, primary):
+        if primary:
+            return False
+        clipboard[primary] = text
+        return True
+
+    monkeypatch.setattr(output, "write", write)
+    paste = Mock()
+    assert output.insert("hello", paste) == "failed"
+    paste.assert_not_called()
+    assert clipboard == {False: "hello", True: "selection"}
+
+
+def test_timed_out_copy_is_killed_and_reaped(monkeypatch):
+    process = Mock()
+    process.communicate.side_effect = [output.subprocess.TimeoutExpired("wl-copy", 2), (None, None)]
+    monkeypatch.setattr(output.subprocess, "Popen", lambda *a, **kw: process)
+    assert not output.write("hello", False)
+    process.kill.assert_called_once()
+    assert process.communicate.call_count == 2

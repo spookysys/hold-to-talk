@@ -9,6 +9,10 @@ id "$user" >/dev/null
 [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
 cd "$(dirname "$0")"
 [ keys/voice-keys -nt keys/voice-keys.c ] || { echo "build first: make -C keys" >&2; exit 1; }
+[ build/keyd-guard/bin/keyd -nt keys/keyd-guard.patch ] || {
+    echo "build first: ./keys/build-keyd.sh" >&2
+    exit 1
+}
 
 # keyd must switch the left Super key to the layer "overlay" while it is held.
 # ":M" keeps Super on all other keys, so Super+A still opens the app grid.
@@ -43,15 +47,15 @@ grep -Eq '^[[:space:]]*disable_modifier_guard[[:space:]]*=[[:space:]]*1' "$conf"
 	echo "warning: disable_modifier_guard = 1 in $conf; the overview can open after each dictation" >&2
 
 install -D -m 0755 keys/voice-keys /usr/local/libexec/voice-keys
+install -D -m 0755 build/keyd-guard/bin/keyd /usr/local/libexec/voice-keyd
+install -D -m 0644 build/keyd-guard/LICENSE /usr/local/share/voice/keyd.LICENSE
+install -D -m 0644 keys/keyd-voice.conf /etc/systemd/system/keyd.service.d/voice.conf
 install -m 0644 keys/voice-keys@.socket keys/voice-keys@.service /etc/systemd/system/
 
-# `keyd check` is no gate: keyd 2.6 exits with an error for a mere warning.
-if systemctl is-active --quiet keyd; then
-	keyd reload
-else
-	echo "keyd is not running. Start it: systemctl enable --now keyd" >&2
-fi
-
+# Restart keyd so the guard runs in the process that injects the keys.
 systemctl daemon-reload
+systemctl restart keyd
+
 systemctl enable --now "voice-keys@$user.socket"
+systemctl try-restart "voice-keys@$user.service"
 echo "voice-keys installed for $user"

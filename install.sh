@@ -5,6 +5,7 @@ set -eu
 cd "$(dirname "$0")"
 
 make -C keys
+./keys/build-keyd.sh
 uv tool install --force --python 3.13 .
 
 models="$HOME/.local/share/voice/models"

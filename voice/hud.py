@@ -9,7 +9,7 @@ The child runs in the system Python. The Tk in uv's Python has no Xft, so it
 knows only bitmap fonts and draws all text at 13 pixels. This file therefore
 uses the standard library only.
 
-The parent sends one JSON line per change:
+The parent sends one JSON message per change through a nonblocking socket:
     {"state": "listening", "text": "..."}
     {"state": "loading", "eta": 3.5, "elapsed": 0}   only the bar, at 90 % after eta seconds
     {"state": "ready"}   the model is loaded; the box hides by itself after a moment
@@ -24,7 +24,9 @@ import json
 import math
 import os
 import shutil
+import socket
 import subprocess
+import threading
 import sys
 import time
 
@@ -35,6 +37,7 @@ FONT = "Adwaita Sans"
 class Hud:
     def __init__(self) -> None:
         self.process: subprocess.Popen | None = None
+        self.connection: socket.socket | None = None
         self.shown = False
         self.failed = False      # the box could not start; voice works on without it
 
@@ -53,40 +56,55 @@ class Hud:
 
     def close(self) -> None:
         self.shown = False
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
         process, self.process = self.process, None
-        if process is None:
-            return
+        if process is not None:
+            try:
+                process.terminate()
+            except OSError:
+                pass
+            threading.Thread(target=self._reap, args=(process,), daemon=True).start()
+
+    @staticmethod
+    def _reap(process: subprocess.Popen) -> None:
         try:
-            process.stdin.close()
             process.wait(timeout=1)
-        except (OSError, subprocess.TimeoutExpired):
+        except subprocess.TimeoutExpired:
             process.kill()
+            process.wait()
 
     def _send(self, message: dict) -> None:
-        if not os.environ.get("DISPLAY"):
+        if not os.environ.get("DISPLAY") or self.failed:
             return
-        if self.failed:
-            return
-        if self.process is not None and self.process.poll() not in (None, 0):
-            self.failed = True
-            print("voice: the caption box ended with an error; voice goes on without it",
-                  flush=True)
-            return
-        if self.process is None or self.process.poll() is not None:
-            if message.get("state") is None:
-                return
-            python = shutil.which("python3", path="/usr/bin") or sys.executable
-            self.process = subprocess.Popen([python, "-I", os.path.abspath(__file__)],
-                                            stdin=subprocess.PIPE, text=True, bufsize=1)
         try:
-            self.process.stdin.write(json.dumps(message) + "\n")
-        except (OSError, ValueError):
+            if self.process is not None and self.process.poll() is not None:
+                raise OSError("the caption process ended")
+            if self.process is None:
+                if message.get("state") is None:
+                    return
+                python = shutil.which("python3", path="/usr/bin") or sys.executable
+                parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+                self.connection = parent
+                parent.setblocking(False)
+                try:
+                    self.process = subprocess.Popen(
+                        [python, "-I", os.path.abspath(__file__), str(child.fileno())],
+                        pass_fds=(child.fileno(),), stdin=subprocess.DEVNULL)
+                finally:
+                    child.close()
+            # Each message is complete or fails. A stalled box cannot block keys.
+            self.connection.send(json.dumps(message).encode())
+        except (OSError, ValueError) as error:
+            self.failed = True
             self.close()
+            print(f"voice: caption box unavailable: {error}; voice goes on without it",
+                  flush=True)
 
 
-def run() -> int:
-    """The child: draw the box from the JSON lines on stdin."""
-    import threading
+def run(connection: socket.socket | None = None) -> int:
+    """The child: draw the box from JSON messages."""
     import tkinter as tk
 
     root = tk.Tk()
@@ -189,7 +207,8 @@ def run() -> int:
         place()
 
     def read() -> None:
-        for line in sys.stdin:
+        messages = sys.stdin if connection is None else iter(lambda: connection.recv(262144), b"")
+        for line in messages:
             try:
                 message = json.loads(line)
             except ValueError:
@@ -203,4 +222,5 @@ def run() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    connection = socket.socket(fileno=int(sys.argv[1])) if len(sys.argv) == 2 else None
+    sys.exit(run(connection))

@@ -19,7 +19,8 @@
  *   up     the launch key went up (the layer went off)
  *
  * No key names or codes leave this program. A client can send "paste", and
- * the helper then makes keyd send the paste chord.
+ * the helper then makes keyd send the paste chord, only while the layer is off.
+ * It replies "held", "pasted" (keyd completed), or "failed".
  *
  * systemd passes the listening socket (socket activation). Without it, give
  * --socket PATH, for a test.
@@ -50,11 +51,14 @@
 
 static const char *layer = "overlay";
 static const char *chord = "S-insert";
+static const char *guarded_keyd = "/usr/local/libexec/voice-keyd";
 
 static int server = -1;
 static int clients[MAX_CLIENTS];
 static char client_buf[MAX_CLIENTS][64];
 static size_t client_len[MAX_CLIENTS];
+static pid_t paste_pid[MAX_CLIENTS];
+static sigset_t original_signals;
 
 static int listen_fd = -1;   /* pty master of `keyd listen` */
 static pid_t listen_pid = -1;
@@ -68,17 +72,20 @@ static int pointer_count;
 static int held;             /* the layer is on */
 static int keyed;            /* a key came during this hold */
 
-static void say(const char *message)
+static void reply(int i, const char *message)
 {
 	size_t n = strlen(message);
-	for (int i = 0; i < MAX_CLIENTS; i++) {
-		if (clients[i] < 0)
-			continue;
-		if (send(clients[i], message, n, MSG_NOSIGNAL | MSG_DONTWAIT) != (ssize_t)n) {
-			close(clients[i]);
-			clients[i] = -1;
-		}
+	if (clients[i] >= 0 &&
+	    send(clients[i], message, n, MSG_NOSIGNAL | MSG_DONTWAIT) != (ssize_t)n) {
+		close(clients[i]);
+		clients[i] = -1;
 	}
+}
+
+static void say(const char *message)
+{
+	for (int i = 0; i < MAX_CLIENTS; i++)
+		reply(i, message);
 }
 
 static int has_button(int fd)
@@ -156,10 +163,12 @@ static void start_listen(void)
 		return;
 	}
 	if (pid == 0) {
+		sigprocmask(SIG_SETMASK, &original_signals, NULL);
 		execlp("keyd", "keyd", "listen", (char *)NULL);
 		_exit(127);
 	}
 	fcntl(master, F_SETFD, FD_CLOEXEC);
+	fcntl(master, F_SETFL, O_NONBLOCK);
 	listen_fd = master;
 	listen_pid = pid;
 	line_len = 0;
@@ -180,6 +189,8 @@ static void read_listen(void)
 {
 	char buf[512];
 	ssize_t got = read(listen_fd, buf, sizeof buf);
+	if (got < 0 && (errno == EAGAIN || errno == EINTR))
+		return;
 	if (got <= 0) {
 		fprintf(stderr, "voice-keys: keyd listen ended\n");
 		stop_listen();
@@ -287,12 +298,56 @@ static void read_pointer(int i)
 	}
 }
 
-static void paste(void)
+static void paste(int i)
 {
+	/* A layer event can arrive after the main ppoll returned. */
+	struct pollfd source = {.fd = listen_fd, .events = POLLIN};
+	while (listen_fd >= 0 && poll(&source, 1, 0) > 0)
+		read_listen();
+	if (clients[i] < 0)
+		return;
+	if (held) {
+		reply(i, "held\n");
+		return;
+	}
+	if (listen_fd < 0 || paste_pid[i] > 0) {
+		reply(i, "failed\n");
+		return;
+	}
 	pid_t pid = fork();
 	if (pid == 0) {
-		execlp("keyd", "keyd", "do", chord, (char *)NULL);
+		sigprocmask(SIG_SETMASK, &original_signals, NULL);
+		alarm(2);   /* A stalled command must not paste much later. */
+		execl(guarded_keyd, "voice-keyd", "do-unless", layer, chord, (char *)NULL);
 		_exit(127);
+	}
+	if (pid < 0)
+		reply(i, "failed\n");
+	else
+		paste_pid[i] = pid;
+}
+
+static void child_exited(int signum)
+{
+	(void)signum;   /* ppoll returns; the main loop collects the status. */
+}
+
+static void reap(void)
+{
+	int status;
+	pid_t pid;
+	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+		for (int i = 0; i < MAX_CLIENTS; i++) {
+			if (paste_pid[i] == pid) {
+				paste_pid[i] = 0;
+				const char *result = "failed\n";
+				if (WIFEXITED(status)) {
+					if (WEXITSTATUS(status) == 0) result = "pasted\n";
+					if (WEXITSTATUS(status) == 2) result = "held\n";
+				}
+				reply(i, result);
+			}
+		}
 	}
 }
 
@@ -311,7 +366,7 @@ static void read_client(int i)
 	while ((end = memchr(buf, '\n', client_len[i]))) {
 		*end = '\0';
 		if (strcmp(buf, "paste") == 0)
-			paste();
+			paste(i);
 		size_t used = end + 1 - buf;
 		memmove(buf, end + 1, client_len[i] - used);
 		client_len[i] -= used;
@@ -332,7 +387,11 @@ static void accept_client(void)
 		if (clients[i] < 0) {
 			clients[i] = fd;
 			client_len[i] = 0;
-			return;   /* a client that comes during a hold starts at the next one */
+			paste_pid[i] = 0;
+			/* Cancel a hold that began before this client connected. */
+			if (held)
+				reply(i, "down\nkey\n");
+			return;
 		}
 	}
 	close(fd);
@@ -397,14 +456,20 @@ int main(int argc, char **argv)
 	for (int i = 0; i < MAX_CLIENTS; i++)
 		clients[i] = -1;
 	signal(SIGPIPE, SIG_IGN);
+	struct sigaction action = {.sa_handler = child_exited};
+	sigemptyset(&action.sa_mask);
+	sigaction(SIGCHLD, &action, NULL);
+	sigset_t blocked;
+	sigemptyset(&blocked);
+	sigaddset(&blocked, SIGCHLD);
+	sigprocmask(SIG_BLOCK, &blocked, &original_signals);
 	server = open_server(socket_path);
 	if (server < 0)
 		return 1;
 
 	long retry_at = 0;
 	for (;;) {
-		while (waitpid(-1, NULL, WNOHANG) > 0)
-			;
+		reap();
 		if (now_ms() >= retry_at) {
 			if (listen_fd < 0)
 				start_listen();
@@ -425,8 +490,13 @@ int main(int argc, char **argv)
 			fds[n++] = (struct pollfd){.fd = pointers[i], .events = POLLIN};
 
 		int missing = listen_fd < 0 || keyboard < 0;
-		if (poll(fds, n, missing ? RETRY_MS : -1) < 0 && errno != EINTR)
+		struct timespec retry = {.tv_sec = RETRY_MS / 1000};
+		/* Unblock SIGCHLD only inside the wait, so no completion is missed. */
+		if (ppoll(fds, n, missing ? &retry : NULL, &original_signals) < 0) {
+			if (errno == EINTR)
+				continue;
 			return 1;
+		}
 
 		/* The pointers first: reading the layer can close them. Backwards,
 		 * because a closed pointer takes the place of the last one. */

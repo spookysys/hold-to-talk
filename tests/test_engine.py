@@ -1,4 +1,9 @@
-from voice.engine import foreign
+import queue
+from unittest.mock import Mock
+
+import pytest
+
+from voice.engine import Engine, foreign
 
 
 def test_latin_text_with_umlauts_and_accents_is_not_foreign():
@@ -23,3 +28,49 @@ def test_speech_is_loud_against_its_quiet_parts():
     assert not speechlike(np.zeros(100))
     click = np.concatenate([room[:16000], 0.5 * np.ones(320), room[:16000]])   # 20 ms, the key
     assert not speechlike(click)
+
+
+@pytest.mark.parametrize("language, text, retried", [
+    ("ru", "Привет", False),
+    ("auto", "Привет", True),
+    ("de", "Hallo", False),
+])
+def test_fallback_respects_explicit_language(language, text, retried):
+    results = []
+    engine = Engine("", 2, language, results.append, lambda ok: None, languages=["de", "en"])
+    engine.stream = Mock()
+    engine.text = text
+    engine._feed = Mock()
+    engine._decode = Mock()
+    engine._again = Mock(return_value="fallback")
+    engine._do("end", 1, b"")
+    assert engine._again.called == retried
+    assert results[0].text == ("fallback" if retried else text)
+    assert results[0].final
+
+
+@pytest.mark.parametrize("failed_job", ["begin", "feed", "end"])
+def test_engine_failure_reports_completion_once(failed_job):
+    results = []
+    engine = Engine("", 2, "auto", results.append, lambda ok: None)
+    engine.recognizer = Mock()
+    engine.recognizer.is_ready.return_value = False
+    engine.recognizer.get_result.return_value = ""
+    perform = engine._do
+
+    def fail(job, dictation, audio):
+        if job == failed_job:
+            raise RuntimeError("test recognition failure")
+        perform(job, dictation, audio)
+
+    engine._do = fail
+    engine.begin(1, b"")
+    engine.feed(1, b"\0\0")
+    engine.end(1)
+    # Run the real worker loop until it has consumed this finite job sequence.
+    get = engine.jobs.get
+    engine.jobs.get = lambda: get(block=False)
+    with pytest.raises(queue.Empty):
+        engine.run()
+    assert len(results) == 1
+    assert results[0].final and results[0].text == ""
