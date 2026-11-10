@@ -54,6 +54,9 @@ with Shift+Insert. Check the recognized text before submitting a prompt,
 especially code identifiers and commands. Individual AI clients have not been
 separately verified.
 
+See [Voice typing for AI coding assistants on Linux](docs/voice-typing-ai-coding-assistants.md)
+for a complete workflow and example prompts.
+
 ## Install
 
 You need:
