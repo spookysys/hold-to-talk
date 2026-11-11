@@ -155,6 +155,22 @@ def test_a_hold_while_unloaded_loads_and_dictates(daemon):
     assert daemon.written == ["late but complete"]
 
 
+def test_a_tap_hides_the_box_only_when_no_text_is_on_its_way(daemon):
+    daemon.model = "unloaded"
+    dictate(daemon)
+    key(daemon, "up", 2)
+    daemon._stop()
+    key(daemon, "down", 3)
+    key(daemon, "up", 3.1)                  # a tap during the load
+    assert daemon.hud.calls[-1] == "loading"
+    daemon._loaded(True)
+    daemon._text(Result(daemon.dictation, "done", final=True))
+    settle(daemon)
+    key(daemon, "down", 5)
+    key(daemon, "up", 5.1)                  # a tap with nothing on its way
+    assert daemon.hud.calls[-1] == "hide"
+
+
 def test_a_release_during_the_load_keeps_the_bar(daemon):
     daemon.model = "unloaded"
     dictate(daemon)

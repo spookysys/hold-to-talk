@@ -2,6 +2,9 @@
 
 **Hold the Super key, speak, and release to insert your words.**
 
+**Your voice never leaves your computer.** Recognition runs on your own CPU.
+Nothing is sent to a cloud service, and it works without a network connection.
+
 hold-to-talk provides local speech-to-text and push-to-talk dictation on Linux
 Wayland. Use voice typing in an editor, a browser, a chat window, or a terminal.
 Before pasting, it returns to the window where the hold started.

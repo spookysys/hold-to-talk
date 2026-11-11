@@ -432,7 +432,9 @@ class Daemon:
         self._stop_recorder()
         if self.unload_at is None:       # a tap or shortcut does not keep the model
             self._schedule_unload()
-        self.hud.hide()
+        # The box of an earlier dictation stays until its text is done.
+        if self.model != "loading" and not self.writing and self.stop_at is None:
+            self.hud.hide()
 
     def _finish(self) -> None:
         if not self.listening:
