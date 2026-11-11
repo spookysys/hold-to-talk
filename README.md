@@ -178,14 +178,18 @@ Restart voice after editing the file.
 
 ```toml
 language = "auto"          # or an explicit code such as "de" or "en"
-languages = ["de", "en"]   # fallback languages for automatic detection
+languages = ["de", "en"]   # the languages you speak, for a wrong guess
 threads = 2
 idle_minutes = 30
 hold_ms = 300              # must match keyd's overload_tap_timeout
 ```
 
-With automatic detection, unexpected scripts or empty results can trigger another
-decode in the fallback languages. An explicit language disables that fallback.
+With automatic detection, the model sometimes guesses a wrong language. When the
+text is mostly in another script, or empty although you spoke, voice decodes the
+dictation again in each of your languages and keeps the surest text. Keep the list
+short: each language adds one decode. A wrong guess that also uses Latin letters,
+such as Swedish for Norwegian, is not detected. An explicit language disables this.
+Codes are two letters, such as "de", "en", or "nb" for Norwegian.
 Increasing the thread count is not necessarily faster on a small CPU.
 
 ## Privacy and limitations
