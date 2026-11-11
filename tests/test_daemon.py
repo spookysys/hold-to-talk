@@ -236,6 +236,20 @@ def test_the_microphone_ends_by_itself(daemon):
     assert daemon.recorder is None
 
 
+def test_unload_during_a_dictation_happens_after_it(daemon):
+    dictate(daemon)
+    daemon._unload_now(signal.SIGUSR1, None)
+    daemon.unload_at = None              # the loop puts it off: the dictation is busy
+    key(daemon, "up", 2)
+    daemon._stop()
+    daemon._text(Result(daemon.dictation, "text", final=True))
+    settle(daemon)
+    assert daemon.unload_at <= time.monotonic()
+    daemon._free_model()
+    daemon._schedule_unload()
+    assert daemon.unload_at > time.monotonic() + 60   # the request does not stay
+
+
 def test_no_unload_during_a_dictation(daemon):
     dictate(daemon)
     daemon.unload_at = 0.0

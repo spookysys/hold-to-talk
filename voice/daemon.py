@@ -135,6 +135,7 @@ class Daemon:
         self.model = "unloaded"          # or "loading", "loaded"
         self.load_since = 0.0
         self.unload_at: float | None = None
+        self.unload_requested = False    # `voice unload` came; free at the next idle moment
         self.swap_check_at: float | None = None
         self.level_at = 0.0
         self.hud = Hud()
@@ -150,6 +151,7 @@ class Daemon:
         signal.signal(signal.SIGUSR1, self._unload_now)   # `voice unload`
 
     def _unload_now(self, signum, frame) -> None:
+        self.unload_requested = True         # kept until the model is freed
         self.unload_at = 0.0                 # the loop frees the model at its next pass
         os.write(self.wake_w, b"u")          # and select() must return for that
 
@@ -198,6 +200,7 @@ class Daemon:
                         function(*arguments)
 
     def _free_model(self) -> None:
+        self.unload_requested = False
         self.unload_at = None
         self.swap_check_at = None
         self.model = "unloaded"
@@ -563,7 +566,7 @@ class Daemon:
     def _schedule_unload(self) -> None:
         if not self.writing and not self.listening:
             now = time.monotonic()
-            self.unload_at = now + self.config.idle_minutes * 60
+            self.unload_at = now + (0 if self.unload_requested else self.config.idle_minutes * 60)
             if self.model == "loaded":
                 self.swap_check_at = now + SWAP_CHECK_S
 
