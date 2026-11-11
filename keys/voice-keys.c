@@ -3,7 +3,7 @@
  * more.
  *
  * keyd holds the keyboards, so no other program sees the raw keys. This helper
- * reads two things that keyd offers to its group:
+ * reads three things:
  *
  *   - `keyd listen`, which prints "+overlay" and "-overlay" when the layer of
  *     the launch key goes on and off;
@@ -72,14 +72,21 @@ static int pointer_count;
 static int held;             /* the layer is on */
 static int keyed;            /* a key came during this hold */
 
+/* The slot stays taken until its paste command ends: a new client must not
+ * receive the result of the old one, nor start a second paste beside it. */
+static void close_client(int i)
+{
+	close(clients[i]);
+	clients[i] = -1;
+	client_len[i] = 0;
+}
+
 static void reply(int i, const char *message)
 {
 	size_t n = strlen(message);
 	if (clients[i] >= 0 &&
-	    send(clients[i], message, n, MSG_NOSIGNAL | MSG_DONTWAIT) != (ssize_t)n) {
-		close(clients[i]);
-		clients[i] = -1;
-	}
+	    send(clients[i], message, n, MSG_NOSIGNAL | MSG_DONTWAIT) != (ssize_t)n)
+		close_client(i);
 }
 
 static void say(const char *message)
@@ -356,9 +363,7 @@ static void read_client(int i)
 	char *buf = client_buf[i];
 	ssize_t got = recv(clients[i], buf + client_len[i], sizeof client_buf[i] - client_len[i], 0);
 	if (got <= 0) {
-		close(clients[i]);
-		clients[i] = -1;
-		client_len[i] = 0;
+		close_client(i);
 		return;
 	}
 	client_len[i] += got;
@@ -371,11 +376,8 @@ static void read_client(int i)
 		memmove(buf, end + 1, client_len[i] - used);
 		client_len[i] -= used;
 	}
-	if (client_len[i] == sizeof client_buf[i]) {   /* a line that long is not ours */
-		close(clients[i]);
-		clients[i] = -1;
-		client_len[i] = 0;
-	}
+	if (client_len[i] == sizeof client_buf[i])     /* a line that long is not ours */
+		close_client(i);
 }
 
 static void accept_client(void)
@@ -384,10 +386,8 @@ static void accept_client(void)
 	if (fd < 0)
 		return;
 	for (int i = 0; i < MAX_CLIENTS; i++) {
-		if (clients[i] < 0) {
+		if (clients[i] < 0 && paste_pid[i] == 0) {
 			clients[i] = fd;
-			client_len[i] = 0;
-			paste_pid[i] = 0;
 			/* Cancel a hold that began before this client connected. */
 			if (held)
 				reply(i, "down\nkey\n");

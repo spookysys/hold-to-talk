@@ -4,16 +4,14 @@ from pathlib import Path
 import subprocess
 
 
-def test_helper_rejects_holds_and_reports_command_status(tmp_path):
-    source = Path(__file__).resolve().parents[1] / "keys/voice-keys.c"
-    harness = tmp_path / "helper-test.c"
-    harness.write_text('''
+SOURCE = Path(__file__).resolve().parents[1] / "keys/voice-keys.c"
+PRELUDE = '''
 #define main helper_main
 #include "SOURCE"
 #undef main
 #include <assert.h>
 
-static void expect(int fd, const char *text)
+__attribute__((unused)) static void expect(int fd, const char *text)
 {
     char buf[64] = {0};
     assert(read(fd, buf, sizeof buf - 1) == (ssize_t)strlen(text));
@@ -28,7 +26,27 @@ static void complete(void)
     }
     assert(paste_pid[0] == 0);
 }
+'''
 
+
+def run_harness(tmp_path, body, keyd_script):
+    """Compile the helper with a test main() and run it with a fake keyd."""
+    harness = tmp_path / "helper-test.c"
+    harness.write_text((PRELUDE + body).replace("SOURCE", str(SOURCE)))
+    keyd = tmp_path / "keyd"
+    keyd.write_text(keyd_script)
+    keyd.chmod(0o755)
+    binary = tmp_path / "helper-test"
+    subprocess.run(["cc", "-Wall", "-Wextra", "-Werror", "-o", str(binary), str(harness), "-lutil"],
+                   check=True, capture_output=True, timeout=20)
+    # Keep unrelated credentials out of child processes and failure reports.
+    subprocess.run([str(binary)], cwd=tmp_path,
+                   env={"PATH": str(tmp_path) + ":/usr/bin:/bin", "VOICE_TEST_KEYD": str(keyd)},
+                   check=True, capture_output=True, timeout=5)
+
+
+def test_helper_rejects_holds_and_reports_command_status(tmp_path):
+    run_harness(tmp_path, '''
 int main(void)
 {
     guarded_keyd = getenv("VOICE_TEST_KEYD");
@@ -69,13 +87,47 @@ int main(void)
     expect(peers[1], "failed\\n");
     return 0;
 }
-'''.replace("SOURCE", str(source)))
-    keyd = tmp_path / "keyd"
-    keyd.write_text('#!/bin/sh\nexit "${VOICE_TEST_FAIL:-0}"\n')
-    keyd.chmod(0o755)
-    binary = tmp_path / "helper-test"
-    subprocess.run(["cc", "-Wall", "-Wextra", "-Werror", "-o", str(binary), str(harness), "-lutil"],
-                   check=True, capture_output=True, timeout=20)
-    # Keep unrelated credentials out of child processes and failure reports.
-    subprocess.run([str(binary)], env={"PATH": str(tmp_path), "VOICE_TEST_KEYD": str(keyd)},
-                   check=True, capture_output=True, timeout=5)
+''', '#!/bin/sh\nexit "${VOICE_TEST_FAIL:-0}"\n')
+
+
+def test_a_new_client_waits_for_the_old_paste_to_end(tmp_path):
+    run_harness(tmp_path, '''
+static int client(void)
+{
+    struct sockaddr_un addr = {.sun_family = AF_UNIX, .sun_path = "test.sock"};
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    assert(connect(fd, (struct sockaddr *)&addr, sizeof addr) == 0);
+    accept_client();
+    return fd;
+}
+
+int main(void)
+{
+    guarded_keyd = getenv("VOICE_TEST_KEYD");
+    int layers[2];
+    assert(pipe(layers) == 0);
+    listen_fd = layers[0];
+    fcntl(listen_fd, F_SETFL, O_NONBLOCK);
+    for (int i = 0; i < MAX_CLIENTS; i++) clients[i] = -1;
+    server = open_server("test.sock");
+    assert(server >= 0);
+
+    int first = client();
+    assert(write(first, "paste\\n", 6) == 6);
+    read_client(0);
+    assert(paste_pid[0] > 0);
+    close(first);              /* the daemon goes away during the paste */
+    read_client(0);
+    assert(clients[0] == -1);
+
+    int second = client();
+    assert(clients[0] == -1 && clients[1] >= 0);
+    complete();
+    char buf[16];
+    assert(recv(second, buf, sizeof buf, MSG_DONTWAIT) < 0);   /* no stray result */
+
+    client();
+    assert(clients[0] >= 0);   /* the slot is free again */
+    return 0;
+}
+''', "#!/bin/sh\nsleep 0.2\n")
