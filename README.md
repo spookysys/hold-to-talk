@@ -14,7 +14,7 @@ It needs no API key or speech service. German and English have been tested.
 - See a live caption and microphone level while you speak.
 - Keep Super shortcuts: a tap opens the GNOME overview; Super plus another key cancels dictation and keeps the shortcut.
 - Insert only after release. The caption never edits your text.
-- Free the speech model after 30 idle minutes.
+- Free the speech model after 30 idle minutes, or sooner when memory pressure swaps it out.
 
 The tested setup is **GNOME Wayland (Fedora 44)**, with PipeWire, systemd, and
 [keyd](https://github.com/rvaiya/keyd). X11 sessions are not supported.
@@ -204,8 +204,8 @@ Paste requests run in sequence, with at least one second between them.
 Applications do not confirm text delivery; a stalled application can still read a later clipboard value.
 See [open issues and outstanding hardware checks](ISSUES.md).
 
-Earlier measurements on an Intel i3-1215U with 8 GB RAM showed about 35 MB
-of daemon memory while unloaded, and about 1 GB during dictation.
+Earlier measurements on an Intel i3-1215U with 8 GB RAM showed about 35 to 45 MB
+of daemon memory while unloaded, and about 730 MB while the model is loaded.
 Idle CPU use was 0%, with insertion usually 0.4 to 0.6 seconds after release.
 These are reference measurements, not guarantees for the latest build or other computers.
 

@@ -34,6 +34,9 @@ CONFIG = Path.home() / ".config/voice/config.toml"
 # The microphone records this long after the release. People release the key
 # on their last syllable, and pw-record loses up to 0.1 s when it stops.
 AFTER_S = 0.3
+SWAP_CHECK_S = 30.0
+# Once this much of an idle model is in swap, reloading is faster than paging it in.
+MAX_IDLE_SWAP_KB = 128 * 1024
 MODEL = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11"
 
 
@@ -63,6 +66,17 @@ class Config:
 
 def log(message: str) -> None:
     print(f"voice: {message}", flush=True)
+
+
+def swapped_kb() -> int:
+    try:
+        with open("/proc/self/status") as status:
+            for line in status:
+                if line.startswith("VmSwap:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
 
 
 @dataclass
@@ -101,6 +115,7 @@ class Daemon:
         self.model = "unloaded"          # or "loading", "loaded"
         self.load_since = 0.0
         self.unload_at: float | None = None
+        self.swap_check_at: float | None = None
         self.level_at = 0.0
         self.hud = Hud()
         self.wake_r, self.wake_w = os.pipe()
@@ -145,9 +160,9 @@ class Daemon:
                 self.unload_at = None
                 if self._busy():         # the end of the hold or dictation schedules it again
                     continue
-                self.model = "unloaded"
-                self.engine.unload()
-                self.hud.close()
+                self._free_model()
+            if self.swap_check_at is not None and now >= self.swap_check_at:
+                self._check_swap(now)
 
             # Read key events before worker results from the same selector pass.
             ready = self.selector.select(self._timeout(time.monotonic()))
@@ -162,12 +177,31 @@ class Daemon:
                         function, arguments = self.events.pop(0)
                         function(*arguments)
 
+    def _free_model(self) -> None:
+        self.unload_at = None
+        self.swap_check_at = None
+        self.model = "unloaded"
+        self.engine.unload()
+        self.hud.close()
+
+    def _check_swap(self, now: float) -> None:
+        if self.model != "loaded":
+            self.swap_check_at = None
+        elif self._busy():
+            self.swap_check_at = now + SWAP_CHECK_S
+        elif swapped_kb() >= MAX_IDLE_SWAP_KB:
+            log("memory pressure swapped the model out; freeing it")
+            self._free_model()
+        else:
+            self.swap_check_at = now + SWAP_CHECK_S
+
     def _busy(self) -> bool:
         return (self.hold.state != H.IDLE or self.listening or bool(self.writing)
                 or self.stop_at is not None)
 
     def _timeout(self, now: float) -> float | None:
-        times = [self.hold.deadline(), self.unload_at, self.stop_at, self.paste_at]
+        times = [self.hold.deadline(), self.unload_at, self.swap_check_at,
+                 self.stop_at, self.paste_at]
         if self.keys is None:
             times.append(self.connect_at)
         if self.hold.state == H.ACTIVE:
@@ -299,6 +333,11 @@ class Daemon:
     # Actions of the hold.
 
     def _act(self, actions: list[str]) -> None:
+        if (H.RECORD in actions and self.model == "loaded"
+                and not self.listening and not self.writing and self.stop_at is None
+                and swapped_kb() >= MAX_IDLE_SWAP_KB):
+            log("memory pressure swapped the model out; freeing it")
+            self._free_model()
         if H.RECORD in actions and self.model == "loaded":
             self.destination = self.focus.capture()
         for action in actions:
@@ -319,6 +358,7 @@ class Daemon:
     def _begin(self) -> None:
         self.active_since = time.monotonic()
         self.unload_at = None
+        self.swap_check_at = None
         if self.model == "loaded" and self.recorder is None:
             # The hold began while the model loaded, so nothing was recorded.
             self.hud.show("ready")
@@ -491,7 +531,10 @@ class Daemon:
 
     def _schedule_unload(self) -> None:
         if not self.writing and not self.listening:
-            self.unload_at = time.monotonic() + self.config.idle_minutes * 60
+            now = time.monotonic()
+            self.unload_at = now + self.config.idle_minutes * 60
+            if self.model == "loaded":
+                self.swap_check_at = now + SWAP_CHECK_S
 
 
 def main() -> int:

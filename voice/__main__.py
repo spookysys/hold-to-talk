@@ -38,7 +38,22 @@ def control(action: str) -> int:
     return status()
 
 
+def memory_kb(pid: int) -> tuple[int, int]:
+    rss = swap = 0
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss = int(line.split()[1])
+                elif line.startswith("VmSwap:"):
+                    swap = int(line.split()[1])
+    except OSError:
+        pass
+    return rss, swap
+
+
 def unload() -> int:
+    import time
     from .engine import LOADED
 
     pid = main_pid()
@@ -49,6 +64,12 @@ def unload() -> int:
         print("voice: the model is not loaded")
         return 0
     os.kill(pid, signal.SIGUSR1)       # the daemon frees the model
+    deadline = time.monotonic() + 10
+    while LOADED.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if LOADED.exists():
+        print("voice: unload requested; waiting for active work to finish")
+        return 0
     print("voice: model freed")
     return 0
 
@@ -61,13 +82,12 @@ def status() -> int:
     if state != "active" or not pid:
         print(f"voice: {state}")
         return 0 if state == "inactive" else 1
-    try:
-        with open(f"/proc/{pid}/status") as f:
-            rss = next(int(line.split()[1]) for line in f if line.startswith("VmRSS:"))
-    except (OSError, StopIteration):
-        rss = 0
+    rss, swap = memory_kb(pid)
+    total_mb = (rss + swap) // 1024
+    swap_mb = swap // 1024
     model = "loaded" if LOADED.exists() else "not loaded"
-    print(f"voice: running, model {model}, {rss // 1024} MB")
+    detail = f"{total_mb} MB ({swap_mb} MB swapped)" if swap_mb else f"{total_mb} MB"
+    print(f"voice: running, model {model}, {detail}")
     return 0
 
 

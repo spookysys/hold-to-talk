@@ -83,6 +83,7 @@ def daemon(monkeypatch, tmp_path):
     monkeypatch.setattr(D, "Focus", FakeFocus)
     monkeypatch.setattr(D, "Hud", FakeHud)
     monkeypatch.setattr(D, "LOADED", tmp_path / "loaded")
+    monkeypatch.setattr(D, "swapped_kb", lambda: 0)
     monkeypatch.setattr(D.subprocess, "Popen", FakeRecorder)
     written = []
     monkeypatch.setattr(D.output, "insert", lambda text, paste: written.append(text.strip()) or "pasted")
@@ -381,3 +382,45 @@ def test_each_dictation_keeps_its_key_down_destination(daemon, monkeypatch):
     assert [item.destination for item in daemon.waiting] == [first, second]
     assert not daemon.destinations
     daemon.output_busy = False
+
+
+def test_swapped_idle_model_is_freed_and_unloaded_sleeps_forever(daemon, monkeypatch):
+    daemon._schedule_unload()
+    assert daemon.swap_check_at is not None
+    monkeypatch.setattr(D, "swapped_kb", lambda: D.MAX_IDLE_SWAP_KB)
+    daemon._check_swap(daemon.swap_check_at)
+    assert daemon.model == "unloaded"
+    assert ("unload",) in daemon.engine.calls
+    assert daemon.unload_at is None
+    assert daemon.swap_check_at is None
+    daemon.keys = object()
+    assert daemon._timeout(0.0) is None
+    daemon.keys = None
+
+
+def test_swapped_model_reloads_on_hold_instead_of_recording(daemon, monkeypatch):
+    monkeypatch.setattr(D, "swapped_kb", lambda: D.MAX_IDLE_SWAP_KB)
+    dictate(daemon)
+    assert daemon.model == "loading"
+    assert not daemon.listening
+    assert ("unload",) in daemon.engine.calls
+    assert ("load",) in daemon.engine.calls
+    assert daemon.hud.calls[-1] == "loading"
+
+
+def test_status_reports_swapped_memory_and_unload_waits(monkeypatch, tmp_path, capsys):
+    import voice.__main__ as cli
+    import voice.engine as E
+
+    marker = tmp_path / "loaded"
+    marker.touch()
+    monkeypatch.setattr(E, "LOADED", marker)
+    monkeypatch.setattr(cli, "systemctl", lambda *a: type("R", (), {"stdout": "active\n", "returncode": 0})())
+    monkeypatch.setattr(cli, "main_pid", lambda: 42)
+    monkeypatch.setattr(cli, "memory_kb", lambda pid: (22 * 1024, 1024 * 1024))
+    assert cli.status() == 0
+    assert "model loaded, 1046 MB (1024 MB swapped)" in capsys.readouterr().out
+
+    monkeypatch.setattr(cli.os, "kill", lambda pid, sig: marker.unlink())
+    assert cli.unload() == 0
+    assert "voice: model freed" in capsys.readouterr().out

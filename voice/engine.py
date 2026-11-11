@@ -69,6 +69,14 @@ def speechlike(samples: np.ndarray) -> bool:
     return int(loud.sum()) >= 10
 
 
+def trim_memory() -> None:
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)   # glibc keeps freed memory otherwise
+    except OSError:
+        pass
+
+
 def pcm(data: bytes) -> np.ndarray:
     """16-bit mono samples as the float samples that the model takes."""
     return np.frombuffer(data[: len(data) // 2 * 2], np.int16).astype(np.float32) / 32768
@@ -214,6 +222,7 @@ class Engine(threading.Thread):
             tokens=one("tokens.txt"), encoder=one("encoder*.onnx"),
             decoder=one("decoder*.onnx"), joiner=one("joiner*.onnx"),
             num_threads=self.threads)
+        trim_memory()
         self.load_s = time.monotonic() - started
         if self.marker:
             self.marker.touch()
@@ -224,8 +233,7 @@ class Engine(threading.Thread):
         if self.recognizer is not None:
             self.recognizer = self.stream = None
             self.dropped.clear()
-            gc.collect()
-            ctypes.CDLL("libc.so.6").malloc_trim(0)   # glibc keeps freed memory otherwise
+            trim_memory()
             if self.marker:
                 self.marker.unlink(missing_ok=True)
             print("voice: model freed", flush=True)

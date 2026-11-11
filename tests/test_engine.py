@@ -74,3 +74,17 @@ def test_engine_failure_reports_completion_once(failed_job):
         engine.run()
     assert len(results) == 1
     assert results[0].final and results[0].text == ""
+
+
+def test_unload_trims_memory_and_removes_marker(monkeypatch, tmp_path):
+    import voice.engine as E
+
+    trimmed = []
+    marker = tmp_path / "loaded"
+    marker.touch()
+    monkeypatch.setattr(E, "trim_memory", lambda: trimmed.append(True))
+    engine = Engine("", 2, "auto", lambda r: None, lambda ok: None, marker=marker)
+    engine.recognizer = Mock()
+    engine._unload()
+    assert trimmed == [True]
+    assert not marker.exists()
