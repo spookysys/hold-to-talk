@@ -18,7 +18,8 @@ Follow the [installation guide](../README.md#install). It lists the dependencies
 key mapping, and two installation commands. Read the system-install section:
 it installs a patched keyd binary through a service override.
 
-The tested setup is GNOME Wayland (Fedora 44). Other Wayland desktops are unverified.
+The tested setup is GNOME 50 Wayland (Fedora 44). Automatic window restoration
+requires the included GNOME extension. Other desktops need manual pasting.
 Your target application must accept
 clipboard pasting with Shift+Insert. Individual AI clients have not been separately
 verified, so check the text field you intend to use.
@@ -34,8 +35,8 @@ That first hold does not record a dictation.
 
 ## Dictate a prompt
 
-Open a new prompt in your coding assistant. Keep that field focused until the
-paste finishes. Hold the left Super key and speak, then release it.
+Open a new prompt in your coding assistant. Hold the left Super key and speak,
+then release it. The app restores the original window before requesting paste.
 
 For example:
 
@@ -69,8 +70,8 @@ The key still performs its Super shortcut. Choose a key without an assigned
 shortcut, such as Escape. Shift, Ctrl, and Alt do not cancel.
 
 Use the keyboard to edit the pasted text. Submit the prompt only when you are
-satisfied with it. If you change focus before the paste, the text can go into
-the newly focused field instead.
+satisfied with it. A focus change after restoration can still redirect the paste.
+Changing tabs or fields within the same window is not detected.
 
 The dictated text stays in the clipboard and primary selection. The previous
 clipboard is not restored. Recognized text also appears in the local systemd

@@ -1,30 +1,21 @@
 # Open issues
 
-## Focus changes can send dictation to another application
+## Focus can change after window restoration
 
-A user reported that an automated application launch takes focus during a hold.
-Releasing Super then inserts the dictation into the newly focused application.
+The daemon now retains a destination for each dictation. The GNOME extension
+restores that window and confirms its focus before the helper requests paste.
+A focus change between confirmation and key delivery can still redirect text.
+This best-effort behavior was explicitly requested after reviewing the race.
+A browser tab or field change within the same window is not detected.
 
-`voice/daemon.py` retains text without a destination window identity.
-`voice/output.py` fills the clipboard, then keyd sends Shift+Insert to current focus.
-The same problem affects delayed recognition and queued dictations after release.
-
-The fix must retain the intended destination for each dictation.
-A focus check before key injection alone leaves a race with another focus change.
-Desktop integration must prevent delivery to a different application, including
-when focus changes during recognition, clipboard preparation, or queued output.
-If delivery is blocked, retain the text and clearly explain how to recover it.
-The requested behavior is to return to the window captured at key-down and
-insert there after release. A later focus change must not redirect the text.
-See [the insertion investigation](docs/focus-safe-insertion.md).
-
-Verify with two windows and an automated focus change during each stage above.
-Also test a closed destination, unavailable focus tracking, and successive
-holds that begin in different windows. No fix or hardware check is complete yet.
+See [window restoration](docs/focus-safe-insertion.md) for the implementation,
+source findings, and remaining checks. Firefox and physical-keyboard verification
+remain incomplete. A closed window or unavailable extension blocks automatic paste.
 
 ## Applications do not confirm paste delivery
 
-Paste operations run in sequence. Queued dictations use one paste where possible.
+Paste operations run in sequence. Each queued dictation keeps its own
+destination and paste request.
 The helper confirms command completion, not receipt by the focused application.
 `voice/output.py::insert` waits one second before another dictation can replace
 its clipboard text. Automatic restoration does not remove the text.

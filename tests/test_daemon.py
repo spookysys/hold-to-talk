@@ -14,6 +14,16 @@ from voice import hold as H
 from voice.engine import Result
 
 
+class FakeFocus:
+    def capture(self):
+        result = Future()
+        result.set_result("test-window")
+        return result
+
+    def restore(self, destination):
+        return True
+
+
 class FakeEngine:
     load_s = 3.5
 
@@ -70,6 +80,7 @@ class FakeRecorder:
 @pytest.fixture
 def daemon(monkeypatch, tmp_path):
     monkeypatch.setattr(D, "Engine", FakeEngine)
+    monkeypatch.setattr(D, "Focus", FakeFocus)
     monkeypatch.setattr(D, "Hud", FakeHud)
     monkeypatch.setattr(D, "LOADED", tmp_path / "loaded")
     monkeypatch.setattr(D.subprocess, "Popen", FakeRecorder)
@@ -203,12 +214,12 @@ def test_early_engine_failure_completes_before_release(daemon):
     assert not any(call[0] == "end" for call in daemon.engine.calls)
 
 
-def test_queued_texts_use_one_paste(daemon):
+def test_queued_texts_keep_separate_destinations(daemon):
     dictate(daemon)
     daemon._text(Result(-1, "one", final=True))
     daemon._text(Result(0, "two", final=True))
     key(daemon, "up", 2)
-    assert daemon.written == ["one two"]
+    assert daemon.written == ["one", "two"]
 
 
 def test_next_paste_waits_for_previous_application_read(daemon, monkeypatch):
@@ -250,7 +261,7 @@ def test_new_hold_during_clipboard_preparation_defers_paste(daemon, monkeypatch)
         finish.set()
         settle(daemon)
         assert results == ["held"]
-        assert daemon.waiting == ["one"]
+        assert [pending.text for pending in daemon.waiting] == ["one"]
         assert daemon.hold.state == H.PENDING
         peer.sendall(b"up\n")
         daemon._read_keys()
@@ -267,6 +278,7 @@ def test_helper_rejection_defers_paste(daemon):
     with connect(daemon) as peer:
         request = Future()
         daemon._prepare_paste(request)
+        pump(daemon, lambda: daemon.paste_sent)
         assert peer.recv(64) == b"paste\n"
         peer.sendall(b"down\nheld\n")
         daemon._read_keys()
@@ -288,6 +300,7 @@ def test_timeout_discards_the_connection_and_pending_request(daemon):
     with connect(daemon) as peer:
         request = Future()
         daemon._prepare_paste(request)
+        pump(daemon, lambda: daemon.paste_sent)
         assert peer.recv(64) == b"paste\n"
         daemon._disconnect_keys()
         assert request.result(timeout=1) == "failed"
@@ -295,3 +308,76 @@ def test_timeout_discards_the_connection_and_pending_request(daemon):
         assert daemon.paste_at is None
         # A late completion cannot be delivered through the old connection.
         assert peer.recv(64) == b""
+
+
+def test_window_is_restored_after_clipboard_preparation(daemon, monkeypatch):
+    destination = Future()
+    destination.set_result("original")
+    seen = []
+    monkeypatch.setattr(daemon.focus, "restore", lambda target: seen.append(target.result()) or True)
+    with connect(daemon) as peer:
+        request = Future()
+        daemon._prepare_paste(request, destination)
+        pump(daemon, lambda: daemon.paste_sent)
+        assert seen == ["original"]
+        assert peer.recv(64) == b"paste\n"
+        peer.sendall(b"pasted\n")
+        daemon._read_keys()
+        assert request.result() == "pasted"
+
+
+def test_missing_window_never_sends_paste(daemon, monkeypatch):
+    monkeypatch.setattr(daemon.focus, "restore", lambda target: False)
+    with connect(daemon) as peer:
+        request = Future()
+        daemon._prepare_paste(request)
+        pump(daemon, request.done)
+        assert request.result() == "focus-failed"
+        peer.setblocking(False)
+        with pytest.raises(BlockingIOError):
+            peer.recv(64)
+
+
+def test_hold_during_window_restore_defers_paste(daemon, monkeypatch):
+    started, finish = threading.Event(), threading.Event()
+
+    def restore(target):
+        started.set()
+        assert finish.wait(1)
+        return True
+
+    monkeypatch.setattr(daemon.focus, "restore", restore)
+    with connect(daemon) as peer:
+        request = Future()
+        daemon._prepare_paste(request)
+        assert started.wait(1)
+        peer.sendall(b"down\n")
+        finish.set()
+        pump(daemon, request.done)
+        assert request.result() == "held"
+        peer.setblocking(False)
+        with pytest.raises(BlockingIOError):
+            peer.recv(64)
+
+
+def test_each_dictation_keeps_its_key_down_destination(daemon, monkeypatch):
+    first, second = Future(), Future()
+    first.set_result("first")
+    second.set_result("second")
+    captures = iter([first, second])
+    monkeypatch.setattr(daemon.focus, "capture", lambda: next(captures))
+    dictate(daemon)
+    daemon.output_busy = True  # keep results queued for inspection
+    first_id = daemon.dictation
+    daemon._act(daemon.hold.event("up", 2))
+    daemon._stop()
+    daemon._act(daemon.hold.event("down", 3))
+    for _ in daemon.hold.tick(4):
+        daemon._begin()
+    daemon._text(Result(first_id, "first text", final=True))
+    daemon._act(daemon.hold.event("up", 5))
+    daemon._stop()
+    daemon._text(Result(daemon.dictation, "second text", final=True))
+    assert [item.destination for item in daemon.waiting] == [first, second]
+    assert not daemon.destinations
+    daemon.output_busy = False

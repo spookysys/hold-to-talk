@@ -28,6 +28,7 @@ from . import hold as H
 from . import output
 from .engine import LOADED, RATE, Engine, Result
 from .hud import Hud
+from .focus import Focus
 
 CONFIG = Path.home() / ".config/voice/config.toml"
 # The microphone records this long after the release. People release the key
@@ -64,6 +65,12 @@ def log(message: str) -> None:
     print(f"voice: {message}", flush=True)
 
 
+@dataclass
+class PendingText:
+    text: str
+    destination: Future[str] | None
+
+
 class Daemon:
     def __init__(self, config: Config):
         self.config = config
@@ -81,7 +88,13 @@ class Daemon:
         self.paste_request: Future[str] | None = None
         self.paste_sent = False
         self.paste_at: float | None = None
-        self.waiting: list[str] = []     # texts that are ready while the key is down
+        self.focus = Focus()
+        self.destination: Future[str] | None = None
+        self.destinations: dict[int, Future[str] | None] = {}
+        self.paste_destination: Future[str] | None = None
+        self.paste_restoring = False
+        self.paste_restored = False
+        self.waiting: list[PendingText] = []     # texts that are ready while the key is down
         self.stop_at: float | None = None   # the release came; the microphone runs until then
         self.writing: set[int] = set()   # dictations that wait for their final text
         self.text = ""                   # of the newest dictation, as the box shows it
@@ -218,14 +231,16 @@ class Daemon:
         self._paste_done("failed")
         self._write_waiting()
 
-    def _paste(self) -> str:
+    def _paste(self, destination: Future[str] | None) -> str:
         """The output worker waits while the event loop processes keys."""
         request: Future[str] = Future()
-        self._post(self._prepare_paste, request)
+        self._post(self._prepare_paste, request, destination)
         return request.result()
 
-    def _prepare_paste(self, request: Future[str]) -> None:
+    def _prepare_paste(self, request: Future[str], destination: Future[str] | None = None) -> None:
         self.paste_request = request
+        self.paste_destination = destination
+        self.paste_restored = False
         # A key can arrive after select() returned the worker notification.
         self._read_keys()
         self._send_paste()
@@ -239,6 +254,12 @@ class Daemon:
         if self.hold.state != H.IDLE:
             self._paste_done("held")
             return
+        if not self.paste_restored:
+            if not self.paste_restoring:
+                self.paste_restoring = True
+                threading.Thread(target=self._restore, args=(self.paste_request, self.paste_destination),
+                                 daemon=True, name="focus-restore").start()
+            return
         try:
             self.keys.sendall(b"paste\n")
         except OSError:
@@ -247,9 +268,30 @@ class Daemon:
         self.paste_sent = True
         self.paste_at = time.monotonic() + 3
 
+    def _restore(self, request: Future[str], destination: Future[str] | None) -> None:
+        try:
+            ok = self.focus.restore(destination)
+        except Exception:
+            ok = False
+        self._post(self._restored, request, ok)
+
+    def _restored(self, request: Future[str], ok: bool) -> None:
+        if self.paste_request is not request:
+            return                      # a new hold or disconnect canceled this request
+        self.paste_restoring = False
+        if not ok:
+            self._paste_done("focus-failed")
+            return
+        self.paste_restored = True
+        self._read_keys()               # a hold during restoration must still defer paste
+        self._send_paste()
+
     def _paste_done(self, result: str) -> None:
         self.paste_sent = False
         self.paste_at = None
+        self.paste_restoring = False
+        self.paste_restored = False
+        self.paste_destination = None
         request, self.paste_request = self.paste_request, None
         if request is not None:
             request.set_result(result)
@@ -257,6 +299,8 @@ class Daemon:
     # Actions of the hold.
 
     def _act(self, actions: list[str]) -> None:
+        if H.RECORD in actions and self.model == "loaded":
+            self.destination = self.focus.capture()
         for action in actions:
             self._stop()                 # a new hold ends the one before it at once
             {H.RECORD: self._record, H.BEGIN: self._begin,
@@ -289,6 +333,7 @@ class Daemon:
                           elapsed=round(time.monotonic() - self.load_since, 1))
             return
         self.dictation += 1
+        self.destinations[self.dictation] = self.destination
         self.listening = True
         self.text = ""
         self.engine.begin(self.dictation, bytes(self.before))
@@ -332,6 +377,7 @@ class Daemon:
             log("canceled: another key, or voice-keys went away")
             self.listening = False
             self.engine.drop(self.dictation)
+            self.destinations.pop(self.dictation, None)
             self._schedule_unload()
         elif self.unload_at is None:     # a tap or shortcut does not keep the model
             self._schedule_unload()
@@ -395,6 +441,7 @@ class Daemon:
             self._stop_recorder()
             self.listening = False
             self.hold.event("key", time.monotonic())
+        destination = self.destinations.pop(result.dictation, None)
         self.writing.discard(result.dictation)
         if result.dictation == self.dictation and not self.listening:
             self.hud.hide()
@@ -402,7 +449,7 @@ class Daemon:
             log("heard nothing, so nothing is written")
         else:
             log(f"heard: {result.text}")
-            self.waiting.append(result.text)
+            self.waiting.append(PendingText(result.text, destination))
             if self.hold.state != H.IDLE:
                 log("the text waits for the release")
             self._write_waiting()
@@ -416,26 +463,28 @@ class Daemon:
         """
         if self.hold.state != H.IDLE or self.output_busy or not self.waiting:
             return
-        text = " ".join(self.waiting)
-        self.waiting.clear()
+        pending = self.waiting.pop(0)
         self.output_busy = True
-        threading.Thread(target=self._insert, args=(text,), daemon=True,
+        threading.Thread(target=self._insert, args=(pending,), daemon=True,
                          name="output").start()
 
-    def _insert(self, text: str) -> None:
+    def _insert(self, pending: PendingText) -> None:
         try:
-            result = output.insert(text + " ", self._paste)
+            result = output.insert(pending.text + " ", lambda: self._paste(pending.destination))
         except Exception as error:
             log(f"paste failed: {error}")
             result = "failed"
-        self._post(self._inserted, result, text)
+        self._post(self._inserted, result, pending)
 
-    def _inserted(self, result: str, text: str) -> None:
+    def _inserted(self, result: str, pending: PendingText) -> None:
         self.output_busy = False
         if result == "held":
-            self.waiting.insert(0, text)
+            self.waiting.insert(0, pending)
         elif result == "pasted":
-            log(f"sent {len(text)} characters to the focused field")
+            log(f"sent {len(pending.text)} characters to the focused field")
+        elif result == "focus-failed":
+            log("the original window could not be restored; text remains in the clipboard")
+            self.hud.show("paste manually", pending.text)
         else:
             log("the clipboard or voice-keys failed; paste was not confirmed")
         self._write_waiting()

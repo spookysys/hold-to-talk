@@ -1,0 +1,8 @@
+{
+  "uuid": "hold-to-talk@spookysys.github.io",
+  "name": "Hold to Talk Window Restore",
+  "description": "Remember the dictation window and restore it before pasting.",
+  "shell-version": ["50"],
+  "url": "https://github.com/spookysys/hold-to-talk",
+  "version": 1
+}

@@ -1,6 +1,5 @@
 """Exercise the helper with local sockets and a fake keyd command."""
 
-import os
 from pathlib import Path
 import subprocess
 
@@ -77,5 +76,6 @@ int main(void)
     binary = tmp_path / "helper-test"
     subprocess.run(["cc", "-Wall", "-Wextra", "-Werror", "-o", str(binary), str(harness), "-lutil"],
                    check=True, capture_output=True, timeout=20)
-    subprocess.run([str(binary)], env={**os.environ, "PATH": str(tmp_path), "VOICE_TEST_KEYD": str(keyd)},
+    # Keep unrelated credentials out of child processes and failure reports.
+    subprocess.run([str(binary)], env={"PATH": str(tmp_path), "VOICE_TEST_KEYD": str(keyd)},
                    check=True, capture_output=True, timeout=5)

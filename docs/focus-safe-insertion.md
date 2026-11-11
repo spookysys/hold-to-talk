@@ -1,26 +1,42 @@
 # Insert into the original destination
 
-Status: investigation, not an implemented fix.
+## Current behavior
 
-## Required behavior
+The daemon captures a window token when it receives Super key-down. Capture
+runs in a worker. The GNOME extension uses a bounded focus history to resolve
+the window at that timestamp, even if focus changes before the worker runs.
+The timestamp follows helper delivery; it is not the physical key's timestamp.
 
-Remember the destination at Super key-down. After release and recognition,
-return to that window and insert the text there. Another application taking
-focus must not receive the dictation.
+Each dictation retains its token through recognition and deferred output.
+The output worker prepares the clipboard. The extension then activates the
+original window and checks focus for at most 500 milliseconds. After confirmation,
+the daemon drains key events and requests the existing guarded paste.
+A new hold still defers the paste.
 
-Retain a separate destination for each queued dictation. Do not combine texts
-from different destinations. A closed destination must not redirect its text
-to another window. Keep failed text available for recovery.
+The extension identifies windows without reading their titles or contents.
+Tokens include an extension-session identifier. Closed windows and tokens from
+a previous extension session cannot select another window.
 
-The launch key must retain its existing behavior. Insertion must wait until
-release, including when another hold starts during output preparation.
+When restoration fails, automatic paste stops. The caption requests manual paste.
+Text stays in the clipboard until another copy or dictation replaces it.
+A new login is required after installing or updating the extension.
+
+## Remaining limitation
+
+The user selected best-effort restoration after reviewing the race below.
+Another application can take focus after confirmation but before key delivery.
+Restoration reduces this problem; it does not provide atomic delivery.
+The original browser tab, document, and field are not retained separately.
+
+The launch key retains its existing handling. Nothing is pasted before release.
+The integration currently targets GNOME 50. Other desktops need their own
+restoration integration; unavailable integration leaves text for manual paste.
 
 ## Evidence
 
 The installed desktop reports GNOME Shell 50.6 and Mutter 50.6 on Fedora 44.
 The following findings come from source inspection, not a desktop race test.
 
-- The voice daemon queues strings without destination identities.
 - The output worker sets both clipboard selections, then requests Shift+Insert.
 - The keyd guard checks the hold state. It does not check the destination.
 - Mutter's virtual keyboard queues work through its input thread. Calling it
@@ -80,4 +96,7 @@ Distinguish window identity from the identity of a field inside that window.
 
 Verify delayed application handling and clipboard replacement separately.
 A key injection acknowledgment is not proof that an application inserted text.
-No implementation or hardware verification is complete yet.
+Automated daemon and focus-history checks pass. The isolated GNOME 50.6 test
+restores an earlier synthetic window, resolves a delayed capture, and rejects
+a closed window. Run it with `/usr/bin/python3 tests/gnome_integration.py`.
+Physical keyboard and Firefox checks remain outstanding.

@@ -4,7 +4,7 @@
 
 hold-to-talk provides local speech-to-text and push-to-talk dictation on Linux
 Wayland. Use voice typing in an editor, a browser, a chat window, or a terminal.
-It inserts text into the field that has focus when the paste happens.
+Before pasting, it returns to the window where the hold started.
 
 Speech recognition runs locally through
 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), using
@@ -18,7 +18,8 @@ It needs no API key or speech service. German and English have been tested.
 
 The tested setup is **GNOME Wayland (Fedora 44)**, with PipeWire, systemd, and
 [keyd](https://github.com/rvaiya/keyd). X11 sessions are not supported.
-Other Wayland desktops are unverified; the caption window could take focus there.
+Window restoration currently needs the included GNOME 50 extension. Other Wayland
+desktops have no restoration integration yet; text remains available for manual paste.
 
 ## Use
 
@@ -27,7 +28,7 @@ After installation:
 1. Focus the field where you want the text.
 2. Hold the **left Super key** (usually the Windows key).
 3. Speak when the caption box appears, after about 0.3 seconds.
-4. Release Super. The recognized text is pasted into the focused field.
+4. Release Super. The app restores the original window, then pastes the recognized text.
 
 **On the first use, the hold only loads the model.** Wait for the ready message,
 then hold Super again to dictate. This also happens after the model has unloaded.
@@ -61,7 +62,8 @@ for a complete workflow and example prompts.
 
 You need:
 
-- A Wayland session with XWayland available for the caption window. GNOME Wayland (Fedora 44) is the tested setup.
+- GNOME 50 on Wayland for window restoration, with XWayland for the caption window.
+- System Python with PyGObject, and `gdbus`, for extension setup and communication.
 - systemd and keyd.
 - PipeWire with `pw-record` (Fedora package: `pipewire-utils`).
 - `wl-clipboard`.
@@ -114,8 +116,11 @@ voice status
 If `pkexec` is unavailable, use `sudo ./install-system.sh "$(id -un)"`.
 The `voice` command is installed in `~/.local/bin`; include that directory in your `PATH`.
 
-The user installer installs the program and model, then enables and restarts
-`voice.service`. It starts automatically when you log in.
+The user installer installs the program, model, and window-restoration extension.
+It enables `voice.service`, which starts automatically when you log in.
+After the first extension installation or an extension update, log out and back in.
+The installer leaves an existing voice process running until that login.
+Otherwise, it restarts the service immediately.
 
 The system installer installs `voice-keys` and a patched keyd binary.
 A systemd override selects this binary and restarts keyd. The distribution's
@@ -136,7 +141,8 @@ pkexec ./install-system.sh "$(id -un)"
 ```
 
 Update both parts together: the daemon and helper use the same paste protocol.
-The installers restart the affected services.
+The installers restart affected services, except when the GNOME extension needs
+a new login. The user installer prints that requirement.
 
 To reload the **already installed** version or changed settings:
 
@@ -185,9 +191,17 @@ Audio is processed locally. Recognized text goes to your focused application,
 the clipboard, and the local systemd journal. `voice log` displays that journal.
 The destination application controls what happens to text after insertion.
 
-Keep the intended field focused until the paste completes. Paste requests run
-in sequence, with at least one second between them. Applications do not confirm
-text delivery; a stalled application can still read a later clipboard value.
+The app remembers the window when the daemon receives key-down. Before each
+paste, the extension activates that window and confirms its focus. This is a
+best-effort check: another focus change after confirmation can still redirect
+paste. It does not remember a browser tab, document, or field within the window.
+
+If the window has closed or the extension is unavailable, automatic paste stops.
+The caption asks you to paste manually; the text remains in the clipboard.
+A later dictation or copy can replace that clipboard text.
+
+Paste requests run in sequence, with at least one second between them.
+Applications do not confirm text delivery; a stalled application can still read a later clipboard value.
 See [open issues and outstanding hardware checks](ISSUES.md).
 
 Earlier measurements on an Intel i3-1215U with 8 GB RAM showed about 35 MB
@@ -200,6 +214,7 @@ These are reference measurements, not guarantees for the latest build or other c
 - **The first hold records nothing:** wait for the model to load, then hold again.
 - **Nothing happens:** run `voice status`, then `voice log` for diagnostics.
 - **The installer rejects the key mapping:** merge the printed entries into your existing keyd configuration, then rerun it.
+- **The caption asks for manual paste:** log out and back in after installing the extension. Check that Hold to Talk Window Restore is enabled.
 - **The caption works but paste fails:** install both parts again and check the log for helper errors.
 - **`voice` is not found:** check that `~/.local/bin` is in your `PATH`.
 
@@ -214,7 +229,10 @@ cancellation events to the session process. The session process streams micropho
 audio to the local model and displays captions in a separate process.
 
 The session process has no access to input devices or `/dev/uinput`.
+The daemon uses a GNOME Shell extension to restore the original window.
+The extension exposes opaque window tokens, not titles or field contents.
 The helper requests the guarded paste through keyd after release.
+See [window restoration](docs/focus-safe-insertion.md) for its remaining race.
 
 ## Development
 
@@ -224,7 +242,9 @@ uv run pytest
 
 The tests use simulated recognition and clipboard data, local sockets, and a
 fake keyd command. `./keys/build-keyd.sh` also runs upstream keyboard simulations
-and tests the guarded command. Real keyboard and desktop checks remain necessary.
+and tests the guarded command. An isolated GNOME test is available in
+`tests/gnome_integration.py`.
+Real keyboard and Firefox checks remain necessary.
 
 Bug reports should include your desktop, session type, and reproduction steps.
 Remove dictated text from logs before sharing them.
@@ -232,6 +252,8 @@ Remove dictated text from logs before sharing them.
 ## Uninstall
 
 ```sh
+gnome-extensions disable hold-to-talk@spookysys.github.io
+rm -r ~/.local/share/gnome-shell/extensions/hold-to-talk@spookysys.github.io
 systemctl --user disable --now voice.service
 rm ~/.config/systemd/user/voice.service
 systemctl --user daemon-reload

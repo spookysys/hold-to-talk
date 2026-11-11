@@ -20,5 +20,13 @@ fi
 install -D -m 0644 voice.service "$HOME/.config/systemd/user/voice.service"
 systemctl --user daemon-reload
 systemctl --user enable voice.service
-systemctl --user restart voice.service   # a running service keeps old code otherwise
+# A new Shell extension loads at the next login. Keep the working daemon
+# until then; the enabled service starts the new installation at that login.
+restore_status=0
+/usr/bin/python3 gnome/install.py || restore_status=$?
+case "$restore_status" in
+    0) systemctl --user restart voice.service ;;
+    2) : ;;
+    *) exit "$restore_status" ;;
+esac
 echo "voice installed. Root part: pkexec $(pwd)/install-system.sh $(id -un)"
