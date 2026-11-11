@@ -1,6 +1,6 @@
 # Voice typing for AI coding assistants on Linux
 
-Use hold-to-talk to dictate a prompt into an AI coding assistant on GNOME Wayland.
+Use hold-to-talk to dictate a prompt into an AI coding assistant on Linux Wayland.
 Hold the left Super key, speak, and release to paste the recognized text.
 Speech recognition runs on your computer, without an API key or speech service.
 
@@ -18,7 +18,8 @@ Follow the [installation guide](../README.md#install). It lists the dependencies
 key mapping, and two installation commands. Read the system-install section:
 it installs a patched keyd binary through a service override.
 
-The supported desktop is GNOME on Wayland. Your target application must accept
+The tested setup is GNOME Wayland (Fedora 44). Other Wayland desktops are unverified.
+Your target application must accept
 clipboard pasting with Shift+Insert. Individual AI clients have not been separately
 verified, so check the text field you intend to use.
 

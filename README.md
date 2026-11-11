@@ -2,7 +2,7 @@
 
 **Hold the Super key, speak, and release to insert your words.**
 
-hold-to-talk provides local speech-to-text and push-to-talk dictation on GNOME
+hold-to-talk provides local speech-to-text and push-to-talk dictation on Linux
 Wayland. Use voice typing in an editor, a browser, a chat window, or a terminal.
 It inserts text into the field that has focus when the paste happens.
 
@@ -16,7 +16,7 @@ It needs no API key or speech service. German and English have been tested.
 - Insert only after release. The caption never edits your text.
 - Free the speech model after 30 idle minutes.
 
-The supported setup is **GNOME on Wayland**, with PipeWire, systemd, and
+The tested setup is **GNOME Wayland (Fedora 44)**, with PipeWire, systemd, and
 [keyd](https://github.com/rvaiya/keyd). X11 sessions are not supported.
 Other Wayland desktops are unverified; the caption window could take focus there.
 
@@ -61,7 +61,7 @@ for a complete workflow and example prompts.
 
 You need:
 
-- GNOME on Wayland, with XWayland available for the caption window.
+- A Wayland session with XWayland available for the caption window. GNOME Wayland (Fedora 44) is the tested setup.
 - systemd and keyd.
 - PipeWire with `pw-record` (Fedora package: `pipewire-utils`).
 - `wl-clipboard`.
