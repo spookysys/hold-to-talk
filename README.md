@@ -13,6 +13,7 @@ It needs no API key or speech service. German and English have been tested.
 
 - See a live caption and microphone level while you speak.
 - Keep Super shortcuts: a tap opens the GNOME overview; Super plus another key cancels dictation and keeps the shortcut.
+  The text of a canceled dictation goes to the clipboard.
 - Insert only after release. The caption never edits your text.
 - Free the speech model after 30 idle minutes, or sooner when memory pressure swaps it out.
 
@@ -30,13 +31,13 @@ After installation:
 3. Speak when the caption box appears, after about 0.3 seconds.
 4. Release Super. The app restores the original window, then pastes the recognized text.
 
-**On the first use, the hold only loads the model.** Wait for the ready message,
-then hold Super again to dictate. This also happens after the model has unloaded.
-Loading takes several seconds, depending on your computer.
+On the first use, and after the model has unloaded, the caption shows a loading
+bar. Speak as usual. The text appears when the model is ready, a few seconds later.
 
-To cancel, press another key or a mouse button while holding Super.
-Shift, Ctrl, and Alt do not cancel. The other key still performs its Super
-shortcut, so choose one without an assigned shortcut, such as Escape.
+To cancel, press Escape while holding Super. The text is not pasted; it goes
+to the clipboard, and the caption says so for 5 seconds.
+Any other key or a mouse button also cancels, and still performs its Super
+shortcut. Shift, Ctrl, and Alt do not cancel.
 A touchpad tap does not count as a mouse button; press the touchpad down.
 
 The microphone starts at key-down. It continues for 0.3 seconds after release
@@ -178,7 +179,7 @@ languages = ["de", "en"]   # fallback languages for automatic detection
 threads = 2
 idle_minutes = 30
 hold_ms = 300              # must match keyd's overload_tap_timeout
-max_seconds = 120          # stop recording here; wait for release to paste
+max_seconds = 600          # stop recording here; wait for release to paste
 ```
 
 With automatic detection, unexpected scripts or empty results can trigger another
@@ -196,9 +197,9 @@ paste, the extension activates that window and confirms its focus. This is a
 best-effort check: another focus change after confirmation can still redirect
 paste. It does not remember a browser tab, document, or field within the window.
 
-If the window has closed or the extension is unavailable, automatic paste stops.
-The caption asks you to paste manually; the text remains in the clipboard.
-A later dictation or copy can replace that clipboard text.
+If the window has closed or the extension is unavailable, voice does not paste
+anywhere else. The text remains in the clipboard, and the caption says why for
+5 seconds. A later dictation or copy can replace that clipboard text.
 
 Paste requests run in sequence, with at least one second between them.
 Applications do not confirm text delivery; a stalled application can still read a later clipboard value.
@@ -211,10 +212,10 @@ These are reference measurements, not guarantees for the latest build or other c
 
 ## Troubleshooting
 
-- **The first hold records nothing:** wait for the model to load, then hold again.
 - **Nothing happens:** run `voice status`, then `voice log` for diagnostics.
 - **The installer rejects the key mapping:** merge the printed entries into your existing keyd configuration, then rerun it.
-- **The caption asks for manual paste:** log out and back in after installing the extension. Check that Hold to Talk Window Restore is enabled.
+- **The caption says "log out and back in to restore windows":** GNOME Shell loads a new or updated extension only at login. `voice status` also reports it.
+- **The caption says "window changed":** the original window closed or did not take the focus. Paste the text from the clipboard.
 - **The caption works but paste fails:** install both parts again and check the log for helper errors.
 - **`voice` is not found:** check that `~/.local/bin` is in your `PATH`.
 

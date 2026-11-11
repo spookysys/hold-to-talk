@@ -6,9 +6,8 @@ release only the last piece is left, so the text is ready a few hundred
 milliseconds later. A transducer writes text only for sounds it hears, so it
 does not invent text for silence.
 
-The model takes about 1 GB of RAM and a few seconds to load. The daemon asks
-for the load and frees the model after some idle minutes; a dictation begins
-only when the model is loaded.
+The model takes about 800 MB of RAM and a few seconds to load. The daemon asks
+for the load and frees the model after some idle minutes.
 
 Measured on an Intel i3-1215U, on mains power under load, for 30 s of speech:
 two threads decode in 0.46 s per second of speech and use 0.81 CPU seconds.
@@ -57,8 +56,14 @@ class Result:
 
 
 def foreign(text: str) -> bool:
-    """True when the text has a letter that is not Latin: the language guess was wrong."""
-    return any(c.isalpha() and "LATIN" not in unicodedata.name(c, "") for c in text)
+    """True when most letters are not Latin: the language guess was wrong.
+
+    A few such letters are one misheard word. Decoding again costs seconds per
+    minute of speech; once it took 15.7 s for 4 such letters in 181.
+    """
+    letters = [c for c in text if c.isalpha()]
+    other = sum("LATIN" not in unicodedata.name(c, "") for c in letters)
+    return other * 2 > len(letters)
 
 
 def speechlike(samples: np.ndarray) -> bool:
@@ -102,15 +107,15 @@ class Engine(threading.Thread):
         self.on_loaded = on_loaded          # called in this thread: True when ready, False on error
         self.marker = marker                # a file that exists while the model is loaded
         self.jobs: queue.Queue = queue.Queue()
-        self.dropped: set[int] = set()      # canceled dictations
+        self.dropped: set[int] = set()      # failed dictations; their later jobs are skipped
         self.recognizer = None
         self.stream = None                  # of the dictation in progress
         self.text = ""
         self.audio = bytearray()            # of the dictation in progress, for a second decode
         self.load_s = 3.5                   # how long the last load took; for the loading bar
 
-    # Calls from the daemon thread. Each dictation is begin, feed..., end or drop,
-    # after a load.
+    # Calls from the daemon thread. Each dictation is begin, feed..., end. A
+    # dictation can begin before the load is done; the jobs run in order.
 
     def load(self) -> None:
         self._put("load", 0)
@@ -124,10 +129,6 @@ class Engine(threading.Thread):
 
     def end(self, dictation: int) -> None:
         self._put("end", dictation)
-
-    def drop(self, dictation: int) -> None:
-        """Forget a canceled dictation; its queued audio is skipped."""
-        self.dropped.add(dictation)
 
     def unload(self) -> None:
         self._put("unload", 0)

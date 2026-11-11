@@ -30,6 +30,13 @@ def test_stalled_caption_cannot_block_keys(monkeypatch):
         hud.close()
 
 
+def test_caption_starts_again_after_the_model_is_freed():
+    hud = Hud()
+    hud.failed = True
+    hud.close()          # the daemon closes the box when it frees the model
+    assert not hud.failed
+
+
 def test_caption_messages_are_complete(monkeypatch):
     monkeypatch.setenv("DISPLAY", ":test")
     hud = Hud()

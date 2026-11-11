@@ -4,8 +4,8 @@ While nothing happens, the loop sleeps in select() without a timeout, so it
 costs no CPU. The microphone is open only while the launch key is down, and
 AFTER_S longer after a dictation.
 
-A hold is a dictation only when the model is loaded. A hold while it is not
-loaded starts the load and shows its progress; it records nothing.
+A dictation that begins while the model is not loaded starts the load. The
+engine takes the audio in order after the load, so the text follows later.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ CONFIG = Path.home() / ".config/voice/config.toml"
 # on their last syllable, and pw-record loses up to 0.1 s when it stops.
 AFTER_S = 0.3
 SWAP_CHECK_S = 30.0
-# Once this much of an idle model is in swap, reloading is faster than paging it in.
+# Once this much of an idle model is in swap, free it for the other programs.
 MAX_IDLE_SWAP_KB = 128 * 1024
 MODEL = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11"
 
@@ -48,7 +48,7 @@ class Config:
     languages: list[str] = field(default_factory=lambda: ["de", "en"])   # for a wrong guess
     hold_ms: int = 300           # must match overload_tap_timeout in keyd
     idle_minutes: float = 30     # then the model is freed
-    max_seconds: float = 120
+    max_seconds: float = 600     # only against a key that stays down
     socket: str = "/run/voice-keys.sock"
 
     @classmethod
@@ -79,10 +79,29 @@ def swapped_kb() -> int:
     return 0
 
 
+HINT = "speak now"         # the caption text while the dictation has no text yet
+
+# The output results that the user must know about: the log line and the caption message.
+NOTICES = {
+    "copied": ("canceled; the text is in the clipboard",
+               "canceled - text in clipboard"),
+    "changed": ("the original window is gone or did not take the focus; "
+                "the text is in the clipboard",
+                "window changed - text in clipboard"),
+    "not-loaded": ("GNOME Shell has not loaded the window-restore extension; "
+                   "log out and back in. The text is in the clipboard",
+                   "log out and back in to restore windows - text in clipboard"),
+    "failed": ("the clipboard or voice-keys failed; paste was not confirmed",
+               "insert failed - see voice log"),
+}
+MESSAGE_S = 5
+
+
 @dataclass
 class PendingText:
     text: str
     destination: Future[str] | None
+    paste: bool = True         # False: the dictation was canceled; only copy it
 
 
 class Daemon:
@@ -111,6 +130,7 @@ class Daemon:
         self.waiting: list[PendingText] = []     # texts that are ready while the key is down
         self.stop_at: float | None = None   # the release came; the microphone runs until then
         self.writing: set[int] = set()   # dictations that wait for their final text
+        self.canceled: set[int] = set()  # their text goes to the clipboard only
         self.text = ""                   # of the newest dictation, as the box shows it
         self.model = "unloaded"          # or "loading", "loaded"
         self.load_since = 0.0
@@ -265,11 +285,14 @@ class Daemon:
         self._paste_done("failed")
         self._write_waiting()
 
-    def _paste(self, destination: Future[str] | None) -> str:
+    def _paste(self, pending: PendingText) -> str:
         """The output worker waits while the event loop processes keys."""
         request: Future[str] = Future()
-        self._post(self._prepare_paste, request, destination)
-        return request.result()
+        self._post(self._prepare_paste, request, pending.destination)
+        result = request.result()
+        if result == "pasted":
+            log(f"sent {len(pending.text)} characters to the focused field")
+        return result
 
     def _prepare_paste(self, request: Future[str], destination: Future[str] | None = None) -> None:
         self.paste_request = request
@@ -304,17 +327,17 @@ class Daemon:
 
     def _restore(self, request: Future[str], destination: Future[str] | None) -> None:
         try:
-            ok = self.focus.restore(destination)
+            result = self.focus.restore(destination)
         except Exception:
-            ok = False
-        self._post(self._restored, request, ok)
+            result = "changed"
+        self._post(self._restored, request, result)
 
-    def _restored(self, request: Future[str], ok: bool) -> None:
+    def _restored(self, request: Future[str], result: str) -> None:
         if self.paste_request is not request:
             return                      # a new hold or disconnect canceled this request
         self.paste_restoring = False
-        if not ok:
-            self._paste_done("focus-failed")
+        if result != "restored":
+            self._paste_done(result)
             return
         self.paste_restored = True
         self._read_keys()               # a hold during restoration must still defer paste
@@ -333,21 +356,14 @@ class Daemon:
     # Actions of the hold.
 
     def _act(self, actions: list[str]) -> None:
-        if (H.RECORD in actions and self.model == "loaded"
-                and not self.listening and not self.writing and self.stop_at is None
-                and swapped_kb() >= MAX_IDLE_SWAP_KB):
-            log("memory pressure swapped the model out; freeing it")
-            self._free_model()
-        if H.RECORD in actions and self.model == "loaded":
+        if H.RECORD in actions:
             self.destination = self.focus.capture()
         for action in actions:
             self._stop()                 # a new hold ends the one before it at once
-            {H.RECORD: self._record, H.BEGIN: self._begin,
-             H.DISCARD: self._discard, H.FINISH: self._finish}[action]()
+            {H.RECORD: self._record, H.BEGIN: self._begin, H.DISCARD: self._discard,
+             H.FINISH: self._finish, H.CANCEL: self._cancel}[action]()
 
     def _record(self) -> None:
-        if self.model != "loaded":
-            return
         self.recorder = subprocess.Popen(
             ["pw-record", "--rate", str(RATE), "--channels", "1", "--format", "s16", "--raw", "-"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
@@ -359,38 +375,38 @@ class Daemon:
         self.active_since = time.monotonic()
         self.unload_at = None
         self.swap_check_at = None
-        if self.model == "loaded" and self.recorder is None:
-            # The hold began while the model loaded, so nothing was recorded.
-            self.hud.show("ready")
-            return
-        if self.model != "loaded":
-            self._stop_recorder()
-            if self.model == "unloaded":
-                self.model, self.load_since = "loading", time.monotonic()
-                self.engine.load()
-                log("loading the model; hold the key again when it is ready")
-            self.hud.show("loading", eta=round(self.engine.load_s, 1),
-                          elapsed=round(time.monotonic() - self.load_since, 1))
-            return
+        if self.model == "unloaded":
+            # The engine loads first, then takes this dictation's audio.
+            self.model, self.load_since = "loading", time.monotonic()
+            self.engine.load()
+            log("loading the model; the text follows when it is ready")
         self.dictation += 1
         self.destinations[self.dictation] = self.destination
         self.listening = True
         self.text = ""
         self.engine.begin(self.dictation, bytes(self.before))
-        self.hud.show("listening")
+        if self.model == "loading":
+            self._show_load(HINT)
+        else:
+            self.hud.show("listening", hint=HINT)
         log("listening")
+
+    def _show_load(self, hint: str = "") -> None:
+        self.hud.show("loading", hint=hint, eta=round(self.engine.load_s, 1),
+                      elapsed=round(time.monotonic() - self.load_since, 1))
 
     def _loaded(self, ok: bool) -> None:
         if self.model != "loading":      # `voice unload` came during the load
             return
         if not ok:
             self.model = "unloaded"
-            self.hud.hide()
             log("the model failed to load; see the error above")
-            return
+            return                       # the engine ends the dictation without text
         self.model = "loaded"
-        if self.hud.shown and not self.listening:
-            self.hud.show("ready")       # the box hides by itself after a moment
+        if self.listening and self.stop_at is None:
+            self.hud.show("listening", self.text, hint=HINT)
+        elif self.stop_at is not None or self.dictation in self.writing:
+            self.hud.show("writing", self.text)
         self._schedule_unload()
 
     def _stop_recorder(self) -> bytes:
@@ -412,23 +428,32 @@ class Daemon:
         return rest
 
     def _discard(self) -> None:
+        """A tap or a quick key combination: no dictation began."""
         self._stop_recorder()
-        if self.listening:
-            log("canceled: another key, or voice-keys went away")
-            self.listening = False
-            self.engine.drop(self.dictation)
-            self.destinations.pop(self.dictation, None)
+        if self.unload_at is None:       # a tap or shortcut does not keep the model
             self._schedule_unload()
-        elif self.unload_at is None:     # a tap or shortcut does not keep the model
-            self._schedule_unload()
-        self.hud.hide()                  # a load goes on, but without the box
+        self.hud.hide()
 
     def _finish(self) -> None:
-        if not self.listening:           # a hold that started the load
+        if not self.listening:
             return
         self.stop_at = time.monotonic() + AFTER_S
         log(f"stopped listening after {time.monotonic() - self.active_since:.1f} s")
-        self.hud.show("writing", self.text)
+        if self.model == "loading":
+            self._show_load()
+        else:
+            self.hud.show("writing", self.text)
+
+    def _cancel(self) -> None:
+        """Another key, or voice-keys went away: copy the text, but do not paste it."""
+        if not self.listening:
+            return
+        log(f"canceled after {time.monotonic() - self.active_since:.1f} s; "
+            "the text goes to the clipboard only")
+        self.canceled.add(self.dictation)
+        self.stop_at = time.monotonic()  # the key ends the speech; no time after it
+        self._stop()
+        self.hud.hide()                  # the shortcut of the key goes on
 
     def _stop(self) -> None:
         """End the dictation whose key went up; the microphone has run AFTER_S longer."""
@@ -456,7 +481,7 @@ class Daemon:
         if self.listening:
             self.engine.feed(self.dictation, data)
             now = time.monotonic()
-            if now - self.level_at >= 0.1 and self.stop_at is None:
+            if now - self.level_at >= 0.1 and self.stop_at is None and self.model == "loaded":
                 self.level_at = now
                 samples = np.frombuffer(data[: len(data) // 2 * 2], np.int16) / 32768
                 db = 10 * np.log10(max(float(np.mean(samples ** 2)), 1e-12))
@@ -470,8 +495,9 @@ class Daemon:
         if result.dictation == self.dictation:
             self.text = result.text
             if self.listening and self.stop_at is None and not result.final:
-                self.hud.show("listening", result.text)
-            elif not result.final and (self.stop_at is not None or result.dictation in self.writing):
+                self.hud.show("listening", result.text, hint=HINT)
+            elif (not result.final and result.dictation not in self.canceled
+                    and (self.stop_at is not None or result.dictation in self.writing)):
                 self.hud.show("writing", result.text)
         if not result.final:
             return
@@ -482,6 +508,8 @@ class Daemon:
             self.listening = False
             self.hold.event("key", time.monotonic())
         destination = self.destinations.pop(result.dictation, None)
+        paste = result.dictation not in self.canceled
+        self.canceled.discard(result.dictation)
         self.writing.discard(result.dictation)
         if result.dictation == self.dictation and not self.listening:
             self.hud.hide()
@@ -489,7 +517,7 @@ class Daemon:
             log("heard nothing, so nothing is written")
         else:
             log(f"heard: {result.text}")
-            self.waiting.append(PendingText(result.text, destination))
+            self.waiting.append(PendingText(result.text, destination, paste))
             if self.hold.state != H.IDLE:
                 log("the text waits for the release")
             self._write_waiting()
@@ -509,10 +537,14 @@ class Daemon:
                          name="output").start()
 
     def _insert(self, pending: PendingText) -> None:
+        text = pending.text + " "
         try:
-            result = output.insert(pending.text + " ", lambda: self._paste(pending.destination))
+            if pending.paste:
+                result = output.insert(text, lambda: self._paste(pending))
+            else:
+                result = "copied" if output.copy(text) else "failed"
         except Exception as error:
-            log(f"paste failed: {error}")
+            log(f"insert failed: {error}")
             result = "failed"
         self._post(self._inserted, result, pending)
 
@@ -520,13 +552,10 @@ class Daemon:
         self.output_busy = False
         if result == "held":
             self.waiting.insert(0, pending)
-        elif result == "pasted":
-            log(f"sent {len(pending.text)} characters to the focused field")
-        elif result == "focus-failed":
-            log("the original window could not be restored; text remains in the clipboard")
-            self.hud.show("paste manually", pending.text)
-        else:
-            log("the clipboard or voice-keys failed; paste was not confirmed")
+        elif result in NOTICES:
+            line, message = NOTICES[result]
+            log(line)
+            self.hud.show(message, seconds=MESSAGE_S)
         self._write_waiting()
 
     def _schedule_unload(self) -> None:

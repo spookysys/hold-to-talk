@@ -11,9 +11,13 @@ def test_latin_text_with_umlauts_and_accents_is_not_foreign():
         assert not foreign(text)
 
 
-def test_other_scripts_are_foreign():
-    for text in ["हेलो", "Привет", "こんにちは", "Hello हेलो"]:
+def test_mostly_other_scripts_are_foreign():
+    for text in ["हेलो", "Привет", "こんにちは", "Hi Привет"]:
         assert foreign(text)
+
+
+def test_one_misheard_word_is_not_foreign():
+    assert not foreign("Das ist ein langer Satz mit einem Wort Привет darin")
 
 
 def test_speech_is_loud_against_its_quiet_parts():

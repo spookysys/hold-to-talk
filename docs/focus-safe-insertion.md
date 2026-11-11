@@ -17,9 +17,11 @@ The extension identifies windows without reading their titles or contents.
 Tokens include an extension-session identifier. Closed windows and tokens from
 a previous extension session cannot select another window.
 
-When restoration fails, automatic paste stops. The caption requests manual paste.
-Text stays in the clipboard until another copy or dictation replaces it.
-A new login is required after installing or updating the extension.
+When restoration fails, voice never pastes into another window. Text stays in
+the clipboard until another copy or dictation replaces it. The caption shows the
+reason for 5 seconds: "window changed", or, when GNOME Shell has not loaded the
+extension, "log out and back in". A new login is required after installing or
+updating the extension; `voice status` reports a missing one.
 
 ## Remaining limitation
 

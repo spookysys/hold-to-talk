@@ -17,7 +17,8 @@ design for users; read it first.
 - Nothing reaches the focused field until the release. A preview that is wrong
   must never damage the user's text.
 - Keep privileges narrow. The session process needs no access to `/dev/uinput`
-  or to input devices; voice-keys sends nothing but the three events.
+  or to input devices; voice-keys reports only the hold events and the
+  results of paste requests.
 
 ## Layout
 

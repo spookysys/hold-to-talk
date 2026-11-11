@@ -36,15 +36,19 @@ def write(text: str, primary: bool) -> bool:
     return process.returncode == 0
 
 
+def copy(text: str) -> bool:
+    """Put the text in the clipboard and in the primary selection."""
+    return all(write(text, primary) for primary in (False, True))
+
+
 def insert(text: str, paste) -> str:
     """Run one paste transaction in a worker, without overlapping another one.
 
     `paste` returns the helper's result: pasted, held, or failed. Success starts
     a short interval before another transaction can replace the clipboard.
     """
-    for primary in (False, True):
-        if not write(text, primary):
-            return "failed"
+    if not copy(text):
+        return "failed"
     result = paste()
     if result == "pasted":
         time.sleep(PASTE_INTERVAL_S)

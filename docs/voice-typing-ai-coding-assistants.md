@@ -30,8 +30,8 @@ After installation, check the service:
 voice status
 ```
 
-For the first use, hold Super once to load the model. Wait for the ready message.
-That first hold does not record a dictation.
+On the first use, the caption shows a loading bar while you speak. The text
+appears when the model is ready, a few seconds later.
 
 ## Dictate a prompt
 
@@ -65,9 +65,9 @@ These are example prompts, not recorded recognition results or compatibility tes
 
 ## Keep control of the interaction
 
-To cancel a dictation, press another key or a mouse button while holding Super.
-The key still performs its Super shortcut. Choose a key without an assigned
-shortcut, such as Escape. Shift, Ctrl, and Alt do not cancel.
+To cancel a dictation, press Escape while holding Super. The text is not
+pasted; it goes to the clipboard. Any other key or a mouse button also cancels,
+and still performs its Super shortcut. Shift, Ctrl, and Alt do not cancel.
 
 Use the keyboard to edit the pasted text. Submit the prompt only when you are
 satisfied with it. A focus change after restoration can still redirect the paste.
@@ -84,8 +84,8 @@ Run `voice status` and inspect `voice log`. The log includes recognized text.
 Check the same clipboard shortcut in a normal text editor. If it works there
 but not in the assistant, investigate that application's paste behavior.
 
-The model unloads after an idle period. A later first hold loads it again;
-wait for the ready message before dictating. The [README](../README.md#settings)
+The model unloads after an idle period. The next dictation loads it again, and
+its text appears a few seconds later. The [README](../README.md#settings)
 explains the settings, service commands, and update procedure.
 
 Applications do not confirm paste delivery. A stalled application can read a later

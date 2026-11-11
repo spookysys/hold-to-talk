@@ -10,9 +10,11 @@ knows only bitmap fonts and draws all text at 13 pixels. This file therefore
 uses the standard library only.
 
 The parent sends one JSON message per change through a nonblocking socket:
-    {"state": "listening", "text": "..."}
-    {"state": "loading", "eta": 3.5, "elapsed": 0}   only the bar, at 90 % after eta seconds
-    {"state": "ready"}   the model is loaded; the box hides by itself after a moment
+    {"state": "listening", "text": "...", "hint": "speak now"}
+        the header says the state; the body shows the text, or else the hint
+    {"state": "loading", "eta": 3.5, "elapsed": 0}
+        the bar instead of the level, at 90 % after eta seconds
+    {"state": "...", "seconds": 5}   hide after this time
     {"level": 0.6}       microphone loudness, 0 to 1
     {"state": null}      hide
 The child starts at the first dictation and ends when the model is freed.
@@ -56,6 +58,7 @@ class Hud:
 
     def close(self) -> None:
         self.shown = False
+        self.failed = False      # the next message starts a new box
         if self.connection is not None:
             self.connection.close()
             self.connection = None
@@ -97,8 +100,8 @@ class Hud:
             # Each message is complete or fails. A stalled box cannot block keys.
             self.connection.send(json.dumps(message).encode())
         except (OSError, ValueError) as error:
-            self.failed = True
             self.close()
+            self.failed = True
             print(f"voice: caption box unavailable: {error}; voice goes on without it",
                   flush=True)
 
@@ -151,8 +154,8 @@ def run(connection: socket.socket | None = None) -> int:
         root.geometry(f"{width}x{frame.winfo_reqheight()}"
                       f"+{(screen_w - width) // 2}+{int(screen_h * 0.06)}")
 
-    loading = {"since": 0.0, "eta": 1.0, "active": False}
-    hiding = [None]          # the timer that hides the "ready" box
+    loading = {"since": 0.0, "eta": 1.0, "active": False, "header": ""}
+    hiding = [None]          # the timer that hides a message after its seconds
 
     def tick() -> None:
         if not loading["active"]:
@@ -161,7 +164,7 @@ def run(connection: socket.socket | None = None) -> int:
         # never stops while a slow load takes longer than the last one.
         x = (time.monotonic() - loading["since"]) / loading["eta"]
         part = 0.9 * x if x < 1 else 0.99 - 0.09 * math.exp(-3 * (x - 1))
-        header.configure(text=f"voice: loading the model {int(part * 100)} %")
+        header.configure(text=f"voice: {loading['header']}loading the model {int(part * 100)} %")
         meter.coords(bar, 0, 0, int(meter.winfo_width() * part), bar_h)
         root.after(100, tick)
 
@@ -173,23 +176,24 @@ def run(connection: socket.socket | None = None) -> int:
         if hiding[0]:
             root.after_cancel(hiding[0])
             hiding[0] = None
-        loading["active"] = state == "loading"
+        ticking, loading["active"] = loading["active"], state == "loading"
         if state is None:
             hide()
             return
         text = message.get("text") or ""
+        hint = message.get("hint") or ""
         header.configure(text=f"voice: {state}")
         if state != "listening":
             meter.coords(bar, 0, 0, 0, bar_h)
         if state == "loading":
             eta = max(message.get("eta", 3.5), 0.5)
-            loading.update(since=time.monotonic() - message.get("elapsed", 0), eta=eta)
-            tick()
-        elif state == "ready":
-            header.configure(text="voice: ready, hold the key and speak")
-            meter.coords(bar, 0, 0, meter.winfo_width(), bar_h)
-            hiding[0] = root.after(1500, hide)
-        if state in ("loading", "ready"):   # only the header and the bar
+            loading.update(since=time.monotonic() - message.get("elapsed", 0), eta=eta,
+                           header="listening, " if hint else "")
+            if not ticking:
+                tick()
+        if message.get("seconds"):
+            hiding[0] = root.after(int(message["seconds"] * 1000), hide)
+        if not text and not hint:            # only the header
             body.pack_forget()
         elif not body.winfo_manager():
             body.pack(fill="x", padx=2 * pad, pady=(0, pad))
@@ -197,8 +201,8 @@ def run(connection: socket.socket | None = None) -> int:
         body.delete("1.0", "end")
         if text:
             body.insert("end", text)
-        elif state == "listening":
-            body.insert("end", "speak now", "hint")
+        else:
+            body.insert("end", hint, "hint")
         body.see("end")
         body.configure(state="disabled")
         if root.state() == "withdrawn":

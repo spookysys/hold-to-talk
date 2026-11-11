@@ -88,6 +88,12 @@ def status() -> int:
     model = "loaded" if LOADED.exists() else "not loaded"
     detail = f"{total_mb} MB ({swap_mb} MB swapped)" if swap_mb else f"{total_mb} MB"
     print(f"voice: running, model {model}, {detail}")
+    from . import focus
+    try:
+        focus.call("Capture", "0")
+    except focus.NotLoaded:
+        print("voice: GNOME Shell has not loaded the window-restore extension; "
+              "log out and back in")
     return 0
 
 

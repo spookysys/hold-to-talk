@@ -1,4 +1,4 @@
-from voice.hold import ACTIVE, BEGIN, DISCARD, FINISH, IDLE, RECORD, Hold
+from voice.hold import ACTIVE, BEGIN, CANCEL, DISCARD, FINISH, IDLE, RECORD, Hold
 
 
 def run(steps, threshold=0.3):
@@ -26,7 +26,7 @@ def test_fast_combination_cancels():
 
 def test_slow_combination_cancels_the_dictation():
     _, actions = run([(0, "down"), (0.3, "tick"), (1.0, "key"), (1.2, "up")])
-    assert actions == [RECORD, BEGIN, DISCARD]
+    assert actions == [RECORD, BEGIN, CANCEL]
 
 
 def test_deadline_only_while_pending():
@@ -40,7 +40,7 @@ def test_deadline_only_while_pending():
 
 def test_lost_up_starts_over():
     _, actions = run([(0, "down"), (0.3, "tick"), (1.0, "down")])
-    assert actions == [RECORD, BEGIN, DISCARD, RECORD]
+    assert actions == [RECORD, BEGIN, CANCEL, RECORD]
 
 
 def test_limit_finishes_and_release_does_nothing():
@@ -48,6 +48,6 @@ def test_limit_finishes_and_release_does_nothing():
     assert actions == [RECORD, BEGIN, FINISH]
 
 
-def test_helper_lost_discards():
+def test_helper_lost_cancels():
     _, actions = run([(0, "down"), (0.3, "tick"), (1.0, "lost")])
-    assert actions == [RECORD, BEGIN, DISCARD]
+    assert actions == [RECORD, BEGIN, CANCEL]
