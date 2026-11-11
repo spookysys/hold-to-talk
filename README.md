@@ -40,7 +40,7 @@ bar. Speak as usual. The text appears when the model is ready, a few seconds lat
 If you speak more than one language, list them in the [settings](#settings).
 The caption then shows them, with the chosen one marked. While the caption is
 visible, press Space or the arrow keys, still holding Super, to choose another
-language. The text so far is recognized again in the new language. Voice
+language. It applies to what you say next; the text so far stays. Voice
 remembers the choice for the next dictation. Before the caption appears,
 Super+Space still switches the keyboard layout as usual.
 

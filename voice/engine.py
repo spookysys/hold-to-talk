@@ -11,8 +11,9 @@ for the load and frees the model after some idle minutes.
 
 The model takes the language as an input, a code such as "en", or "auto" for
 its own guess; it does not report a guess. The user chooses the language. A
-change during a dictation decodes the audio so far again, so the engine keeps
-the dictation's audio: 32 kB per second, until the dictation ends.
+change during a dictation ends the stream and starts a new one in the new
+language; the text so far stays. Decoding the audio so far again took about
+half as long as it had lasted, and the new speech waited behind it.
 
 Measured on an Intel i3-1215U, on mains power under load, for 30 s of speech:
 two threads decode in 0.46 s per second of speech and use 0.81 CPU seconds.
@@ -88,7 +89,7 @@ class Engine(threading.Thread):
         self.stream = None                  # of the dictation in progress
         self.dictation = 0                  # the dictation in progress
         self.text = ""
-        self.audio = bytearray()            # of the dictation in progress, for a new language
+        self.before = ""                    # the dictation's text in its earlier languages
         self.load_s = 3.5                   # how long the last load took; for the loading bar
 
     # Calls from the daemon thread. Each dictation is begin, feed..., end. A
@@ -108,7 +109,7 @@ class Engine(threading.Thread):
         self._put("end", dictation)
 
     def choose(self, dictation: int, language: str) -> None:
-        """Use this language from now on; decode the dictation again in it."""
+        """Use this language for the rest of the dictation and for the next ones."""
         self._put("choose", dictation, language)
 
     def unload(self) -> None:
@@ -131,7 +132,7 @@ class Engine(threading.Thread):
                           "the microphone stopped", flush=True)
             except Exception:            # the thread must live on; the daemon needs an answer
                 traceback.print_exc()
-                self.stream, self.audio = None, bytearray()
+                self.stream = None
                 if job == "load":
                     self.recognizer = None
                     self.on_loaded(False)
@@ -147,30 +148,32 @@ class Engine(threading.Thread):
         elif job == "choose":
             self.language = data
             if self.stream is not None and dictation == self.dictation:
-                before = self.text
-                self._begin(dictation, bytes(self.audio))
-                if before and not self.text:     # the old text must not stay in the box
-                    self.on_result(Result(dictation, "", final=False))
+                self._finish(dictation)
+                self.before = self.text
+                self._start()
         elif dictation in self.dropped:
-            self.stream, self.audio = None, bytearray()
+            self.stream = None
         elif job == "begin":
-            self._begin(dictation, data)
+            self.dictation, self.text, self.before = dictation, "", ""
+            self._start()
+            self._feed(dictation, pcm(data))
         elif job == "feed":
-            self.audio += data
             self._feed(dictation, pcm(data))
         elif job == "end":
-            self._feed(dictation, np.zeros(int(TAIL_S * RATE), np.float32), quiet=True)
-            self.stream.input_finished()
-            self._decode()
+            self._finish(dictation)
             self.on_result(Result(dictation, self.text, final=True))
-            self.stream, self.audio = None, bytearray()
+            self.stream = None
 
-    def _begin(self, dictation: int, audio: bytes) -> None:
-        """Start a stream in the current language, with the audio so far."""
+    def _start(self) -> None:
+        """A new stream in the current language."""
         self.stream = self.recognizer.create_stream()
         self.stream.set_option("language", self.language)
-        self.dictation, self.text, self.audio = dictation, "", bytearray(audio)
-        self._feed(dictation, pcm(audio))
+
+    def _finish(self, dictation: int) -> None:
+        """Decode the rest of the stream; the silence lets it finish the last word."""
+        self._feed(dictation, np.zeros(int(TAIL_S * RATE), np.float32), quiet=True)
+        self.stream.input_finished()
+        self._decode()
 
     def _feed(self, dictation: int, samples: np.ndarray, quiet: bool = False) -> None:
         if self.stream is None or not len(samples):
@@ -184,7 +187,7 @@ class Engine(threading.Thread):
     def _decode(self) -> None:
         while self.recognizer.is_ready(self.stream):
             self.recognizer.decode_stream(self.stream)
-        self.text = " ".join(self.recognizer.get_result(self.stream).split())
+        self.text = " ".join((self.before + " " + self.recognizer.get_result(self.stream)).split())
 
     def _load(self) -> None:
         if self.recognizer is not None:

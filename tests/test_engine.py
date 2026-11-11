@@ -6,30 +6,29 @@ import pytest
 from voice.engine import Engine
 
 
-def test_a_new_language_decodes_the_dictation_again():
+def test_a_new_language_applies_from_now_on():
     results = []
     engine = Engine("", 2, "de", results.append, lambda ok: None)
     engine.recognizer = Mock()
     streams = []
 
     def create_stream():
-        stream = Mock()
-        streams.append(stream)
-        return stream
+        streams.append(Mock())
+        return streams[-1]
 
     engine.recognizer.create_stream.side_effect = create_stream
     engine.recognizer.is_ready.return_value = False
-    engine.recognizer.get_result.return_value = ""
+    engine.recognizer.get_result.return_value = "Hallo"
     engine._do("begin", 1, b"\1\0")
     engine._do("feed", 1, b"\2\0")
-    engine.text = "Wort"                       # as if the German stream heard a word
     engine._do("choose", 1, "en")
-    assert engine.language == "en"
-    assert len(streams) == 2
+    streams[0].input_finished.assert_called_once()      # the German part is finished
     streams[1].set_option.assert_called_with("language", "en")
-    replayed = streams[1].accept_waveform.call_args[0][1]
-    assert len(replayed) == 2                  # the audio before and after the begin
-    assert results[-1].text == "" and not results[-1].final   # the old text goes
+    assert not streams[1].accept_waveform.called         # nothing is decoded again
+    engine.recognizer.get_result.return_value = "hello"
+    engine._do("feed", 1, b"\3\0")
+    engine._do("end", 1, b"")
+    assert results[-1].text == "Hallo hello" and results[-1].final
 
 
 def test_a_choice_between_dictations_applies_to_the_next_one():
