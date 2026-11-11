@@ -151,8 +151,14 @@ def run(connection: socket.socket | None = None) -> int:
         if root.winfo_width() != width:
             resize(f"{width}x{frame.winfo_reqheight()}")
             root.update_idletasks()
-        lines = body.count("1.0", "end", "displaylines") or 1
-        lines = lines[0] if isinstance(lines, tuple) else lines
+        if body.winfo_width() <= 1:
+            # A window that is not on the screen yet wraps every letter onto a
+            # line of its own. Count the lines again when it has its width.
+            lines = 1
+            root.after(20, place)
+        else:
+            lines = body.count("1.0", "end", "displaylines") or 1
+            lines = lines[0] if isinstance(lines, tuple) else lines
         lines = min(6, max(1, lines))                  # the newest lines when it is longer
         if int(body.cget("height")) != lines:
             body.configure(height=lines)
@@ -171,7 +177,7 @@ def run(connection: socket.socket | None = None) -> int:
         resize(f"{width}x{frame.winfo_reqheight()}"
                f"+{(screen_w - width) // 2}+{int(screen_h * 0.06)}")
 
-    loading = {"since": 0.0, "eta": 1.0, "active": False, "header": ""}
+    loading = {"since": 0.0, "eta": 1.0, "active": False}
     hiding = [None]          # the timer that hides a message after its seconds
 
     def tick() -> None:
@@ -181,7 +187,7 @@ def run(connection: socket.socket | None = None) -> int:
         # never stops while a slow load takes longer than the last one.
         x = (time.monotonic() - loading["since"]) / loading["eta"]
         part = 0.9 * x if x < 1 else 0.99 - 0.09 * math.exp(-3 * (x - 1))
-        header.configure(text=f"voice: {loading['header']}loading the model {int(part * 100)} %")
+        header.configure(text=f"voice: loading {int(part * 100)} %")   # short: the languages follow
         meter.coords(bar, 0, 0, int(meter.winfo_width() * part), bar_h)
         root.after(100, tick)
 
@@ -216,8 +222,7 @@ def run(connection: socket.socket | None = None) -> int:
             meter.coords(bar, 0, 0, 0, bar_h)
         if state == "loading":
             eta = max(message.get("eta", 3.5), 0.5)
-            loading.update(since=time.monotonic() - message.get("elapsed", 0), eta=eta,
-                           header="listening, " if hint else "")
+            loading.update(since=time.monotonic() - message.get("elapsed", 0), eta=eta)
             if not ticking:
                 tick()
         if message.get("seconds"):
