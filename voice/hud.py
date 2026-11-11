@@ -128,7 +128,7 @@ def run(connection: socket.socket | None = None) -> int:
     header = tk.Label(top, anchor="w", font=(FONT, 13, "bold"), fg=DIM, bg=BG)
     header.pack(side="left")
     choices = tk.Frame(top, bg=BG)
-    choices.pack(side="left", padx=(2 * pad, 0))
+    choices.place(relx=0.5, rely=0.5, anchor="center")   # stays put when the header changes
     meter = tk.Canvas(top, height=bar_h, width=width // 4, bg=LINE, highlightthickness=0)
     meter.pack(side="right", pady=pad // 2)
     bar = meter.create_rectangle(0, 0, 0, bar_h, fill=BAR, width=0)
@@ -137,18 +137,28 @@ def run(connection: socket.socket | None = None) -> int:
     body.tag_configure("hint", foreground=DIM)
     body.pack(fill="x", padx=2 * pad, pady=(0, pad))
 
+    geometry = [""]          # the window's last geometry; each change redraws it
+
+    def resize(text: str) -> None:
+        if text != geometry[0]:
+            geometry[0] = text
+            root.geometry(text)
+
     def place() -> None:
         # Wrap at the final width. The requested height is known before the first
         # layout; the real height is then 1 pixel, and GNOME did not show a box
         # that grew from 1 pixel on its first show.
-        root.geometry(f"{width}x{frame.winfo_reqheight()}")
-        root.update_idletasks()
+        if root.winfo_width() != width:
+            resize(f"{width}x{frame.winfo_reqheight()}")
+            root.update_idletasks()
         lines = body.count("1.0", "end", "displaylines") or 1
         lines = lines[0] if isinstance(lines, tuple) else lines
-        body.configure(height=min(6, max(1, lines)))   # the newest lines when it is longer
-        root.update_idletasks()
-        root.geometry(f"{width}x{frame.winfo_reqheight()}"
-                      f"+{(screen_w - width) // 2}+{int(screen_h * 0.06)}")
+        lines = min(6, max(1, lines))                  # the newest lines when it is longer
+        if int(body.cget("height")) != lines:
+            body.configure(height=lines)
+            root.update_idletasks()
+        resize(f"{width}x{frame.winfo_reqheight()}"
+               f"+{(screen_w - width) // 2}+{int(screen_h * 0.06)}")
 
     def hide() -> None:
         root.withdraw()
@@ -158,8 +168,8 @@ def run(connection: socket.socket | None = None) -> int:
         # and then shrink. It opens at one line and grows with the text.
         body.configure(height=1)
         root.update_idletasks()
-        root.geometry(f"{width}x{frame.winfo_reqheight()}"
-                      f"+{(screen_w - width) // 2}+{int(screen_h * 0.06)}")
+        resize(f"{width}x{frame.winfo_reqheight()}"
+               f"+{(screen_w - width) // 2}+{int(screen_h * 0.06)}")
 
     loading = {"since": 0.0, "eta": 1.0, "active": False, "header": ""}
     hiding = [None]          # the timer that hides a message after its seconds
@@ -190,12 +200,18 @@ def run(connection: socket.socket | None = None) -> int:
         text = message.get("text") or ""
         hint = message.get("hint") or ""
         header.configure(text=f"voice: {state}")
-        for label in choices.winfo_children():
-            label.destroy()
-        for language in message.get("languages", []):
+        languages = message.get("languages", [])
+        labels = choices.winfo_children()
+        if [label.cget("text") for label in labels] != [l.upper() for l in languages]:
+            for label in labels:
+                label.destroy()
+            labels = [tk.Label(choices, text=l.upper(), font=(FONT, 13, "bold"), padx=pad // 2)
+                      for l in languages]
+            for label in labels:
+                label.pack(side="left")
+        for language, label in zip(languages, labels):
             chosen = language == message.get("language")
-            tk.Label(choices, text=language.upper(), font=(FONT, 13, "bold"), padx=pad // 2,
-                     fg=FG if chosen else DIM, bg=LINE if chosen else BG).pack(side="left")
+            label.configure(fg=FG if chosen else DIM, bg=LINE if chosen else BG)
         if state != "listening":
             meter.coords(bar, 0, 0, 0, bar_h)
         if state == "loading":
@@ -210,17 +226,16 @@ def run(connection: socket.socket | None = None) -> int:
             body.pack_forget()
         elif not body.winfo_manager():
             body.pack(fill="x", padx=2 * pad, pady=(0, pad))
-        body.configure(state="normal")
-        body.delete("1.0", "end")
-        if text:
-            body.insert("end", text)
-        else:
-            body.insert("end", hint, "hint")
-        body.see("end")
-        body.configure(state="disabled")
+        shown = (text, "") if text else (hint, "hint")
+        if body.get("1.0", "end-1c") != shown[0]:
+            body.configure(state="normal")
+            body.delete("1.0", "end")
+            body.insert("end", *shown)
+            body.see("end")
+            body.configure(state="disabled")
         if root.state() == "withdrawn":
             open_small()
-        root.deiconify()       # Tk counts the wrapped lines only of a visible window
+            root.deiconify()   # Tk counts the wrapped lines only of a visible window
         place()
 
     def read() -> None:
