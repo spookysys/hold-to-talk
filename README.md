@@ -37,6 +37,13 @@ After installation:
 On the first use, and after the model has unloaded, the caption shows a loading
 bar. Speak as usual. The text appears when the model is ready, a few seconds later.
 
+If you speak more than one language, list them in the [settings](#settings).
+The caption then shows them, with the chosen one marked. While the caption is
+visible, press Space or the arrow keys, still holding Super, to choose another
+language. The text so far is recognized again in the new language. Voice
+remembers the choice for the next dictation. Before the caption appears,
+Super+Space still switches the keyboard layout as usual.
+
 To cancel, press Escape while holding Super. The text is not pasted; it goes
 to the clipboard, and the caption says so for 5 seconds.
 Any other key or a mouse button also cancels, and still performs its Super
@@ -177,19 +184,16 @@ Create `~/.config/voice/config.toml` to override the defaults. All settings are 
 Restart voice after editing the file.
 
 ```toml
-language = "auto"          # or an explicit code such as "de" or "en"
-languages = ["de", "en"]   # the languages you speak, for a wrong guess
+languages = ["auto"]       # for example ["en", "de", "nb", "auto"]
 threads = 2
 idle_minutes = 30
 hold_ms = 300              # must match keyd's overload_tap_timeout
 ```
 
-With automatic detection, the model sometimes guesses a wrong language. When the
-text is mostly in another script, or empty although you spoke, voice decodes the
-dictation again in each of your languages and keeps the surest text. Keep the list
-short: each language adds one decode. A wrong guess that also uses Latin letters,
-such as Swedish for Norwegian, is not detected. An explicit language disables this.
-Codes are two letters, such as "de", "en", or "nb" for Norwegian.
+`languages` lists the languages to choose from during a dictation. Codes are two
+letters, such as "de", "en", or "nb" for Norwegian. "auto" lets the model guess;
+it can guess wrong, for example Swedish for Norwegian, and it does not say what
+it guessed. The first entry applies until you choose another one.
 Increasing the thread count is not necessarily faster on a small CPU.
 
 ## Privacy and limitations

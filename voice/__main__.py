@@ -110,7 +110,7 @@ def transcribe(path: str) -> int:
     import time
     import wave
 
-    from .daemon import Config
+    from .daemon import Config, chosen_language
     from .engine import RATE, Engine
 
     config = Config.load()
@@ -121,8 +121,8 @@ def transcribe(path: str) -> int:
         data = w.readframes(w.getnframes())
     results: queue.Queue = queue.Queue()
     loaded: queue.Queue = queue.Queue()
-    engine = Engine(config.model, config.threads, config.language, results.put,
-                    on_loaded=loaded.put, languages=config.languages)
+    engine = Engine(config.model, config.threads, chosen_language(config.languages),
+                    results.put, on_loaded=loaded.put)
     engine.start()
     engine.load()
     if not loaded.get():

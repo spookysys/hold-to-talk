@@ -31,6 +31,8 @@ from .hud import Hud
 from .focus import Focus
 
 CONFIG = Path.home() / ".config/voice/config.toml"
+# The language chosen last, so that the next dictation starts with it.
+LANGUAGE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "voice/language"
 # The microphone records this long after the release. People release the key
 # on their last syllable, and pw-record loses up to 0.1 s when it stops.
 AFTER_S = 0.3
@@ -44,8 +46,9 @@ MODEL = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11"
 class Config:
     model: str = str(Path.home() / ".local/share/voice/models" / MODEL)
     threads: int = 2             # the fastest on a CPU with few fast cores
-    language: str = "auto"       # or a code such as "de" or "en"
-    languages: list[str] = field(default_factory=lambda: ["de", "en"])   # for a wrong guess
+    # Super+Space, Left and Right choose among these during a dictation.
+    # A code such as "de" or "en", or "auto" for the model's own guess.
+    languages: list[str] = field(default_factory=lambda: ["auto"])
     hold_ms: int = 300           # must match overload_tap_timeout in keyd
     idle_minutes: float = 30     # then the model is freed
     socket: str = "/run/voice-keys.sock"
@@ -65,6 +68,23 @@ class Config:
 
 def log(message: str) -> None:
     print(f"voice: {message}", flush=True)
+
+
+def chosen_language(languages: list[str]) -> str:
+    """The language chosen last, if it is still in the list; else the first one."""
+    try:
+        language = LANGUAGE.read_text().strip()
+    except OSError:
+        language = ""
+    return language if language in languages else languages[0]
+
+
+def remember_language(language: str) -> None:
+    try:
+        LANGUAGE.parent.mkdir(parents=True, exist_ok=True)
+        LANGUAGE.write_text(language + "\n")
+    except OSError as error:
+        log(f"cannot remember the language: {error}")
 
 
 def swapped_kb() -> int:
@@ -142,10 +162,11 @@ class Daemon:
         self.events: list = []           # (function, arguments) from the engine thread
         self.selector.register(self.wake_r, selectors.EVENT_READ, "wake")
         LOADED.unlink(missing_ok=True)       # left by a daemon that crashed
-        self.engine = Engine(config.model, config.threads, config.language,
+        self.language = chosen_language(config.languages)
+        self.engine = Engine(config.model, config.threads, self.language,
                              lambda result: self._post(self._text, result),
                              lambda ok: self._post(self._loaded, ok),
-                             marker=LOADED, languages=config.languages)
+                             marker=LOADED)
         self.engine.start()
         signal.signal(signal.SIGUSR1, self._unload_now)   # `voice unload`
 
@@ -162,7 +183,7 @@ class Daemon:
 
     def run(self) -> None:
         log(f"model {Path(self.config.model).name}, {self.config.threads} threads, "
-            f"language {self.config.language}")
+            f"language {self.language} of {', '.join(self.config.languages)}")
         while True:
             now = time.monotonic()
             if self.keys is None and now >= self.connect_at:
@@ -269,6 +290,8 @@ class Daemon:
                 self._paste_done("failed")
             elif name in ("down", "key", "up"):
                 self._act(self.hold.event(name, time.monotonic()))
+            elif name in ("next", "previous"):
+                self._choose(1 if name == "next" else -1)
         self._send_paste()
         self._write_waiting()
 
@@ -315,13 +338,20 @@ class Daemon:
                 threading.Thread(target=self._restore, args=(self.paste_request, self.paste_destination),
                                  daemon=True, name="focus-restore").start()
             return
-        try:
-            self.keys.sendall(b"paste\n")
-        except OSError:
+        if not self._send_keys(b"paste\n"):
             self._paste_done("failed")
             return
         self.paste_sent = True
         self.paste_at = time.monotonic() + 3
+
+    def _send_keys(self, request: bytes) -> bool:
+        if self.keys is None:
+            return False
+        try:
+            self.keys.sendall(request)
+        except OSError:
+            return False
+        return True
 
     def _restore(self, request: Future[str], destination: Future[str] | None) -> None:
         try:
@@ -383,15 +413,38 @@ class Daemon:
         self.listening = True
         self.text = ""
         self.engine.begin(self.dictation, bytes(self.before))
+        if len(self.config.languages) > 1:
+            self._send_keys(b"select\n")    # Space, Left and Right choose the language
         if self.model == "loading":
             self._show_load(HINT)
         else:
-            self.hud.show("listening", hint=HINT)
-        log("listening")
+            self._show("listening", hint=HINT)
+        log(f"listening, language {self.language}")
+
+    def _choose(self, step: int) -> None:
+        """Super+Space, Left or Right during the dictation: another language."""
+        languages = self.config.languages
+        if not self.listening or len(languages) < 2:
+            return
+        index = languages.index(self.language) if self.language in languages else 0
+        self.language = languages[(index + step) % len(languages)]
+        remember_language(self.language)
+        self.engine.choose(self.dictation, self.language)
+        log(f"language {self.language}")
+        if self.model == "loading":
+            self._show_load(HINT)
+        else:
+            self._show("listening", self.text, hint=HINT)
+
+    def _show(self, state: str, text: str = "", **extra) -> None:
+        """Show a state of the dictation, with the languages to choose from."""
+        if len(self.config.languages) > 1:
+            extra.update(languages=self.config.languages, language=self.language)
+        self.hud.show(state, text, **extra)
 
     def _show_load(self, hint: str = "") -> None:
-        self.hud.show("loading", hint=hint, eta=round(self.engine.load_s, 1),
-                      elapsed=round(time.monotonic() - self.load_since, 1))
+        self._show("loading", hint=hint, eta=round(self.engine.load_s, 1),
+                   elapsed=round(time.monotonic() - self.load_since, 1))
 
     def _loaded(self, ok: bool) -> None:
         if self.model != "loading":      # `voice unload` came during the load
@@ -402,9 +455,9 @@ class Daemon:
             return                       # the engine ends the dictation without text
         self.model = "loaded"
         if self.listening and self.stop_at is None:
-            self.hud.show("listening", self.text, hint=HINT)
+            self._show("listening", self.text, hint=HINT)
         elif self.stop_at is not None or self.dictation in self.writing:
-            self.hud.show("writing", self.text)
+            self._show("writing", self.text)
         self._schedule_unload()
 
     def _stop_recorder(self) -> bytes:
@@ -442,7 +495,7 @@ class Daemon:
         if self.model == "loading":
             self._show_load()
         else:
-            self.hud.show("writing", self.text)
+            self._show("writing", self.text)
 
     def _cancel(self) -> None:
         """Another key, or voice-keys went away: copy the text, but do not paste it."""
@@ -495,10 +548,10 @@ class Daemon:
         if result.dictation == self.dictation:
             self.text = result.text
             if self.listening and self.stop_at is None and not result.final:
-                self.hud.show("listening", result.text, hint=HINT)
+                self._show("listening", result.text, hint=HINT)
             elif (not result.final and result.dictation not in self.canceled
                     and (self.stop_at is not None or result.dictation in self.writing)):
-                self.hud.show("writing", result.text)
+                self._show("writing", result.text)
         if not result.final:
             return
         if result.dictation == self.dictation and self.listening:

@@ -5,6 +5,9 @@ After=keyd.service
 
 [Service]
 ExecStart=/usr/local/libexec/voice-keys
+# Drop the selection keys if the helper ended during a hold. A new start
+# drops them too.
+ExecStopPost=-/usr/local/libexec/voice-keyd bind reset
 Restart=on-failure
 
 # A throwaway user with two groups: keyd for `keyd listen` and `keyd do`,

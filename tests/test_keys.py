@@ -18,7 +18,7 @@ __attribute__((unused)) static void expect(int fd, const char *text)
     assert(strcmp(buf, text) == 0);
 }
 
-static void complete(void)
+__attribute__((unused)) static void complete(void)
 {
     for (int i = 0; paste_pid[0] > 0 && i < 1000; i++) {
         reap();
@@ -131,3 +131,57 @@ int main(void)
     return 0;
 }
 ''', "#!/bin/sh\nsleep 0.2\n")
+
+
+def test_selection_keys_are_bound_for_one_hold(tmp_path):
+    run_harness(tmp_path, '''
+static void hear(const char *text)
+{
+    char buf[32];
+    strcpy(buf, text);
+    on_listen_line(buf);
+}
+
+static void calls(const char *text)
+{
+    while (wait(NULL) > 0)
+        ;
+    char buf[256] = {0};
+    FILE *f = fopen("calls", "r");
+    assert(f && fread(buf, 1, sizeof buf - 1, f) > 0);
+    fclose(f);
+    assert(strcmp(buf, text) == 0);
+    remove("calls");
+}
+
+int main(void)
+{
+    guarded_keyd = getenv("VOICE_TEST_KEYD");
+    int peers[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, peers) == 0);
+    clients[0] = peers[0];
+    for (int i = 1; i < MAX_CLIENTS; i++) clients[i] = -1;
+
+    select_keys();                    /* no hold: nothing to bind */
+    assert(!selecting);
+
+    hear("+overlay");
+    expect(peers[1], "down\\n");
+    hear("+meta");                    /* not selecting: no signal */
+    select_keys();
+    calls("bind overlay.space = layer(meta) overlay.right = layer(meta) "
+          "overlay.left = layer(overlay)\\n");
+    hear("+meta");
+    expect(peers[1], "next\\n");
+    hear("-meta");
+    hear("+overlay");                 /* Left */
+    expect(peers[1], "previous\\n");
+    hear("-overlay");                 /* Left up: still held */
+    assert(held);
+    hear("-overlay");                 /* the launch key up */
+    expect(peers[1], "up\\n");
+    calls("bind reset\\n");
+    assert(!selecting && depth == 0);
+    return 0;
+}
+''', '#!/bin/sh\necho "$@" >> calls\n')

@@ -15,6 +15,8 @@ The parent sends one JSON message per change through a nonblocking socket:
     {"state": "loading", "eta": 3.5, "elapsed": 0}
         the bar instead of the level, at 90 % after eta seconds
     {"state": "...", "seconds": 5}   hide after this time
+    {"state": ..., "languages": ["en", "de", "auto"], "language": "de"}
+        the languages to choose from, the chosen one marked; without them, none
     {"level": 0.6}       microphone loudness, 0 to 1
     {"state": null}      hide
 The child starts at the first dictation and ends when the model is freed.
@@ -125,6 +127,8 @@ def run(connection: socket.socket | None = None) -> int:
     top.pack(fill="x", padx=2 * pad, pady=(pad, pad // 2))
     header = tk.Label(top, anchor="w", font=(FONT, 13, "bold"), fg=DIM, bg=BG)
     header.pack(side="left")
+    choices = tk.Frame(top, bg=BG)
+    choices.pack(side="left", padx=(2 * pad, 0))
     meter = tk.Canvas(top, height=bar_h, width=width // 4, bg=LINE, highlightthickness=0)
     meter.pack(side="right", pady=pad // 2)
     bar = meter.create_rectangle(0, 0, 0, bar_h, fill=BAR, width=0)
@@ -186,6 +190,12 @@ def run(connection: socket.socket | None = None) -> int:
         text = message.get("text") or ""
         hint = message.get("hint") or ""
         header.configure(text=f"voice: {state}")
+        for label in choices.winfo_children():
+            label.destroy()
+        for language in message.get("languages", []):
+            chosen = language == message.get("language")
+            tk.Label(choices, text=language.upper(), font=(FONT, 13, "bold"), padx=pad // 2,
+                     fg=FG if chosen else DIM, bg=LINE if chosen else BG).pack(side="left")
         if state != "listening":
             meter.coords(bar, 0, 0, 0, bar_h)
         if state == "loading":

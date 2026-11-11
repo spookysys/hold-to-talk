@@ -14,13 +14,20 @@
  *
  * Each client on the socket receives one line per change:
  *
- *   down   the launch key went down (the layer went on)
- *   key    another key was pressed during this hold (sent once per hold)
- *   up     the launch key went up (the layer went off)
+ *   down      the launch key went down (the layer went on)
+ *   key       another key was pressed during this hold (sent once per hold)
+ *   next      Space or Right while the selection keys are bound
+ *   previous  Left while the selection keys are bound
+ *   up        the launch key went up (the layer went off)
  *
- * No key names or codes leave this program. A client can send "paste", and
- * the helper then makes keyd send the paste chord, only while the layer is off.
- * It replies "held", "pasted" (keyd completed), or "failed".
+ * No other key names or codes leave this program. A client can send:
+ *
+ *   paste   make keyd send the paste chord, only while the layer is off.
+ *           The reply is "held", "pasted" (keyd completed), or "failed".
+ *   select  for the rest of this hold, keyd keeps Space, Left and Right with
+ *           the launch key from the desktop. They activate a layer instead,
+ *           which `keyd listen` reports and no application sees. The release
+ *           drops these bindings again, and so does every start of the helper.
  *
  * systemd passes the listening socket (socket activation). Without it, give
  * --socket PATH, for a test.
@@ -70,7 +77,9 @@ static int pointers[MAX_POINTERS];   /* open during a hold only */
 static int pointer_count;
 
 static int held;             /* the layer is on */
+static int depth;            /* activations of the layer: the launch key, and Left while selecting */
 static int keyed;            /* a key came during this hold */
+static int selecting;        /* the selection keys are bound in keyd */
 
 /* The slot stays taken until its paste command ends: a new client must not
  * receive the result of the old one, nor start a second paste beside it. */
@@ -133,11 +142,51 @@ static void close_pointers(void)
 		close(pointers[--pointer_count]);
 }
 
+/* Run the guarded keyd with these arguments; the main loop reaps the child. */
+static pid_t run_keyd(char *const argv[])
+{
+	pid_t pid = fork();
+	if (pid == 0) {
+		sigprocmask(SIG_SETMASK, &original_signals, NULL);
+		alarm(2);
+		execv(guarded_keyd, argv);
+		_exit(127);
+	}
+	return pid;
+}
+
+/* Space and Right activate keyd's meta layer, which the launch key already
+ * holds, so keyd sends no key. Left activates the launch key's own layer a
+ * second time. `keyd listen` reports both. */
+static void select_keys(void)
+{
+	if (!held || selecting)
+		return;
+	char space[64], right[64], left[96];
+	snprintf(space, sizeof space, "%s.space = layer(meta)", layer);
+	snprintf(right, sizeof right, "%s.right = layer(meta)", layer);
+	snprintf(left, sizeof left, "%s.left = layer(%s)", layer, layer);
+	char *argv[] = {"voice-keyd", "bind", space, right, left, NULL};
+	if (run_keyd(argv) > 0)
+		selecting = 1;
+}
+
+/* Drops every binding made at run time, also bindings of others. */
+static void reset_keys(void)
+{
+	char *argv[] = {"voice-keyd", "bind", "reset", NULL};
+	run_keyd(argv);
+	selecting = 0;
+}
+
 static void release(void)
 {
+	depth = 0;
 	if (held) {
 		held = 0;
 		close_pointers();
+		if (selecting)
+			reset_keys();
 		say("up\n");
 	}
 }
@@ -148,14 +197,23 @@ static void on_listen_line(const char *text)
 	size_t n = strlen(layer);
 	if ((text[0] == '+' || text[0] == '-') && strncmp(text + 1, layer, n) == 0 &&
 	    text[1 + n] == '\0') {
-		if (text[0] == '+' && !held) {
-			held = 1;
-			keyed = 0;
-			say("down\n");
-			open_pointers();
-		} else if (text[0] == '-') {
+		if (text[0] == '+') {
+			depth++;
+			if (!held) {
+				held = 1;
+				keyed = 0;
+				say("down\n");
+				open_pointers();
+			} else if (selecting) {
+				say("previous\n");
+			}
+		} else if (depth > 1) {
+			depth--;         /* Left went up; the launch key is still down */
+		} else {
 			release();
 		}
+	} else if (selecting && strcmp(text, "+meta") == 0) {
+		say("next\n");
 	} else if (text[0] == '/') {
 		release();
 	}
@@ -372,6 +430,8 @@ static void read_client(int i)
 		*end = '\0';
 		if (strcmp(buf, "paste") == 0)
 			paste(i);
+		else if (strcmp(buf, "select") == 0)
+			select_keys();
 		size_t used = end + 1 - buf;
 		memmove(buf, end + 1, client_len[i] - used);
 		client_len[i] -= used;
@@ -466,6 +526,7 @@ int main(int argc, char **argv)
 	server = open_server(socket_path);
 	if (server < 0)
 		return 1;
+	reset_keys();            /* a helper that ended during a hold left them */
 
 	long retry_at = 0;
 	for (;;) {

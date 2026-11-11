@@ -18,7 +18,8 @@ design for users; read it first.
   must never damage the user's text.
 - Keep privileges narrow. The session process needs no access to `/dev/uinput`
   or to input devices; voice-keys reports only the hold events and the
-  results of paste requests.
+  results of paste requests. During a dictation it binds the language keys in
+  keyd, and every release, start, and stop of the helper drops them again.
 
 ## Layout
 

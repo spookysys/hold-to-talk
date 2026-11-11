@@ -9,6 +9,11 @@ does not invent text for silence.
 The model takes about 800 MB of RAM and a few seconds to load. The daemon asks
 for the load and frees the model after some idle minutes.
 
+The model takes the language as an input, a code such as "en", or "auto" for
+its own guess; it does not report a guess. The user chooses the language. A
+change during a dictation decodes the audio so far again, so the engine keeps
+the dictation's audio: 32 kB per second, until the dictation ends.
+
 Measured on an Intel i3-1215U, on mains power under load, for 30 s of speech:
 two threads decode in 0.46 s per second of speech and use 0.81 CPU seconds.
 One thread takes 0.62 s; three take 0.40 s but use more CPU.
@@ -24,7 +29,6 @@ import queue
 import threading
 import time
 import traceback
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,43 +51,12 @@ LOADED = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "
 # recording that began with speech lost its first word.
 TAIL_S = 0.5
 
-# A second decode in the user's languages is for a short dictation with a wrong
-# language guess. Only this much audio is kept for it, so that a dictation of
-# any length uses constant memory. A longer dictation keeps its first text.
-AGAIN_MAX_S = 60
-
 
 @dataclass
 class Result:
     dictation: int
     text: str
     final: bool          # the dictation is over; this is its text
-
-
-def foreign(text: str) -> bool:
-    """True when most letters are not Latin: the language guess was wrong.
-
-    A few such letters are one misheard word. Decoding again costs seconds per
-    minute of speech; once it took 15.7 s for 4 such letters in 181.
-    """
-    letters = [c for c in text if c.isalpha()]
-    other = sum("LATIN" not in unicodedata.name(c, "") for c in letters)
-    return other * 2 > len(letters)
-
-
-def speechlike(samples: np.ndarray) -> bool:
-    """True when at least 200 ms are 20 dB above the quiet tenth.
-
-    A wrong language guess can also give no text at all; then the audio
-    shows whether there was something to hear. A click of the key is loud
-    for a few milliseconds only, so it does not count as speech.
-    """
-    frames = len(samples) // 320                     # of 20 ms
-    if frames < 10:
-        return False
-    rms = np.sqrt((samples[: frames * 320].reshape(frames, 320) ** 2).mean(axis=1))
-    loud = rms > max(10 * float(np.percentile(rms, 10)), 1e-3)
-    return int(loud.sum()) >= 10
 
 
 def trim_memory() -> None:
@@ -101,13 +74,11 @@ def pcm(data: bytes) -> np.ndarray:
 
 class Engine(threading.Thread):
     def __init__(self, model: str, threads: int, language: str, on_result, on_loaded,
-                 marker: Path | None = None, languages: list[str] | None = None):
+                 marker: Path | None = None):
         super().__init__(daemon=True, name="engine")
         self.model_dir = model
         self.threads = threads
-        self.language = language
-        # The user's languages. A text in another script is decoded again in each.
-        self.languages = languages or []
+        self.language = language            # a code such as "en", or "auto"
         self.on_result = on_result          # called in this thread
         self.on_loaded = on_loaded          # called in this thread: True when ready, False on error
         self.marker = marker                # a file that exists while the model is loaded
@@ -115,8 +86,9 @@ class Engine(threading.Thread):
         self.dropped: set[int] = set()      # failed dictations; their later jobs are skipped
         self.recognizer = None
         self.stream = None                  # of the dictation in progress
+        self.dictation = 0                  # the dictation in progress
         self.text = ""
-        self.audio: bytearray | None = bytearray()   # for a second decode; None: too long
+        self.audio = bytearray()            # of the dictation in progress, for a new language
         self.load_s = 3.5                   # how long the last load took; for the loading bar
 
     # Calls from the daemon thread. Each dictation is begin, feed..., end. A
@@ -135,19 +107,23 @@ class Engine(threading.Thread):
     def end(self, dictation: int) -> None:
         self._put("end", dictation)
 
+    def choose(self, dictation: int, language: str) -> None:
+        """Use this language from now on; decode the dictation again in it."""
+        self._put("choose", dictation, language)
+
     def unload(self) -> None:
         self._put("unload", 0)
 
-    def _put(self, job: str, dictation: int, audio: bytes = b"") -> None:
-        self.jobs.put((job, dictation, audio, time.monotonic()))
+    def _put(self, job: str, dictation: int, data: bytes | str = b"") -> None:
+        self.jobs.put((job, dictation, data, time.monotonic()))
 
     # The worker.
 
     def run(self) -> None:
         while True:
-            job, dictation, audio, queued = self.jobs.get()
+            job, dictation, data, queued = self.jobs.get()
             try:
-                self._do(job, dictation, audio)
+                self._do(job, dictation, data)
                 if job == "end" and dictation not in self.dropped:
                     # The microphone stopped when the job was queued. A long
                     # time here means that decoding fell behind the speech.
@@ -163,36 +139,37 @@ class Engine(threading.Thread):
                     self.dropped.add(dictation)
                     self.on_result(Result(dictation, "", final=True))
 
-    def _do(self, job: str, dictation: int, audio: bytes) -> None:
+    def _do(self, job: str, dictation: int, data) -> None:
         if job == "load":
             self._load()
         elif job == "unload":
             self._unload()
+        elif job == "choose":
+            self.language = data
+            if self.stream is not None and dictation == self.dictation:
+                before = self.text
+                self._begin(dictation, bytes(self.audio))
+                if before and not self.text:     # the old text must not stay in the box
+                    self.on_result(Result(dictation, "", final=False))
         elif dictation in self.dropped:
             self.stream, self.audio = None, bytearray()
         elif job == "begin":
-            self._begin(dictation, audio)
+            self._begin(dictation, data)
         elif job == "feed":
-            if self.audio is not None:
-                self.audio += audio
-                if len(self.audio) > AGAIN_MAX_S * RATE * 2:
-                    self.audio = None
-            self._feed(dictation, pcm(audio))
+            self.audio += data
+            self._feed(dictation, pcm(data))
         elif job == "end":
             self._feed(dictation, np.zeros(int(TAIL_S * RATE), np.float32), quiet=True)
             self.stream.input_finished()
             self._decode()
-            again = self.language == "auto" and self.languages and self.audio is not None
-            if again and (foreign(self.text) or
-                          (not self.text and speechlike(pcm(bytes(self.audio))))):
-                self.text = self._again()
             self.on_result(Result(dictation, self.text, final=True))
             self.stream, self.audio = None, bytearray()
 
     def _begin(self, dictation: int, audio: bytes) -> None:
+        """Start a stream in the current language, with the audio so far."""
         self.stream = self.recognizer.create_stream()
         self.stream.set_option("language", self.language)
-        self.text, self.audio = "", bytearray(audio)
+        self.dictation, self.text, self.audio = dictation, "", bytearray(audio)
         self._feed(dictation, pcm(audio))
 
     def _feed(self, dictation: int, samples: np.ndarray, quiet: bool = False) -> None:
@@ -208,30 +185,6 @@ class Engine(threading.Thread):
         while self.recognizer.is_ready(self.stream):
             self.recognizer.decode_stream(self.stream)
         self.text = " ".join(self.recognizer.get_result(self.stream).split())
-
-    def _again(self) -> str:
-        """Decode the dictation again in each of the user's languages; keep the surest text."""
-        started, streams = time.monotonic(), []
-        samples = np.concatenate([pcm(bytes(self.audio)), np.zeros(int(TAIL_S * RATE), np.float32)])
-        for language in self.languages:
-            stream = self.recognizer.create_stream()
-            stream.set_option("language", language)
-            stream.accept_waveform(RATE, samples)
-            stream.input_finished()
-            streams.append(stream)
-        # Together in one batch: about 20 % faster than one after the other.
-        while ready := [s for s in streams if self.recognizer.is_ready(s)]:
-            self.recognizer.decode_streams(ready)
-        found = []
-        for language, stream in zip(self.languages, streams):
-            result = self.recognizer.get_result_all(stream)
-            score = float(np.mean(result.ys_probs)) if len(result.ys_probs) else -np.inf
-            found.append((score, language, " ".join(result.text.split())))
-        score, language, text = max(found)
-        print(f"voice: {self.text!r} looked like a wrong language; decoded again as "
-              f"{', '.join(self.languages)} in {(time.monotonic() - started) * 1000:.0f} ms, "
-              f"kept {language}", flush=True)
-        return text
 
     def _load(self) -> None:
         if self.recognizer is not None:

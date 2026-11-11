@@ -3,54 +3,41 @@ from unittest.mock import Mock
 
 import pytest
 
-from voice.engine import Engine, foreign
+from voice.engine import Engine
 
 
-def test_latin_text_with_umlauts_and_accents_is_not_foreign():
-    for text in ["Hallo, wie geht es?", "Grüße aus Köln", "naïve café", "10 Minuten.", ""]:
-        assert not foreign(text)
-
-
-def test_mostly_other_scripts_are_foreign():
-    for text in ["हेलो", "Привет", "こんにちは", "Hi Привет"]:
-        assert foreign(text)
-
-
-def test_one_misheard_word_is_not_foreign():
-    assert not foreign("Das ist ein langer Satz mit einem Wort Привет darin")
-
-
-def test_speech_is_loud_against_its_quiet_parts():
-    import numpy as np
-    from voice.engine import RATE, speechlike
-
-    rng = np.random.default_rng(1)
-    room = rng.normal(0, 0.001, RATE)
-    voice = 0.2 * np.sin(2 * np.pi * 220 * np.arange(RATE) / RATE)
-    assert speechlike(np.concatenate([room, voice, room]))
-    assert not speechlike(np.concatenate([room, room]))
-    assert not speechlike(np.zeros(100))
-    click = np.concatenate([room[:16000], 0.5 * np.ones(320), room[:16000]])   # 20 ms, the key
-    assert not speechlike(click)
-
-
-@pytest.mark.parametrize("language, text, retried", [
-    ("ru", "Привет", False),
-    ("auto", "Привет", True),
-    ("de", "Hallo", False),
-])
-def test_fallback_respects_explicit_language(language, text, retried):
+def test_a_new_language_decodes_the_dictation_again():
     results = []
-    engine = Engine("", 2, language, results.append, lambda ok: None, languages=["de", "en"])
-    engine.stream = Mock()
-    engine.text = text
-    engine._feed = Mock()
-    engine._decode = Mock()
-    engine._again = Mock(return_value="fallback")
-    engine._do("end", 1, b"")
-    assert engine._again.called == retried
-    assert results[0].text == ("fallback" if retried else text)
-    assert results[0].final
+    engine = Engine("", 2, "de", results.append, lambda ok: None)
+    engine.recognizer = Mock()
+    streams = []
+
+    def create_stream():
+        stream = Mock()
+        streams.append(stream)
+        return stream
+
+    engine.recognizer.create_stream.side_effect = create_stream
+    engine.recognizer.is_ready.return_value = False
+    engine.recognizer.get_result.return_value = ""
+    engine._do("begin", 1, b"\1\0")
+    engine._do("feed", 1, b"\2\0")
+    engine.text = "Wort"                       # as if the German stream heard a word
+    engine._do("choose", 1, "en")
+    assert engine.language == "en"
+    assert len(streams) == 2
+    streams[1].set_option.assert_called_with("language", "en")
+    replayed = streams[1].accept_waveform.call_args[0][1]
+    assert len(replayed) == 2                  # the audio before and after the begin
+    assert results[-1].text == "" and not results[-1].final   # the old text goes
+
+
+def test_a_choice_between_dictations_applies_to_the_next_one():
+    engine = Engine("", 2, "de", lambda r: None, lambda ok: None)
+    engine.recognizer = Mock()
+    engine._do("choose", 1, "nb")
+    assert engine.language == "nb"
+    assert not engine.recognizer.create_stream.called
 
 
 @pytest.mark.parametrize("failed_job", ["begin", "feed", "end"])
@@ -102,23 +89,3 @@ def test_threads_sleep_instead_of_spinning():
     assert "SessionConfig.session.intra_op.allow_spinning=0" in lines
     assert "SessionConfig.session.inter_op.allow_spinning=0" in lines
     assert all("=" in line for line in lines)
-
-
-def test_a_long_dictation_keeps_its_first_text():
-    from voice.engine import AGAIN_MAX_S, RATE
-
-    results = []
-    engine = Engine("", 2, "auto", results.append, lambda ok: None, languages=["de", "en"])
-    engine.stream = Mock()
-    engine._feed = Mock()
-    engine._decode = Mock()
-    engine._again = Mock(return_value="fallback")
-    engine.audio = bytearray()
-    second = b"\0\0" * RATE
-    for _ in range(AGAIN_MAX_S + 1):
-        engine._do("feed", 1, second)
-    assert engine.audio is None               # the memory stays constant
-    engine.text = "Привет"
-    engine._do("end", 1, b"")
-    assert not engine._again.called
-    assert results[-1].text == "Привет"

@@ -84,6 +84,7 @@ def daemon(monkeypatch, tmp_path):
     monkeypatch.setattr(D, "Focus", FakeFocus)
     monkeypatch.setattr(D, "Hud", FakeHud)
     monkeypatch.setattr(D, "LOADED", tmp_path / "loaded")
+    monkeypatch.setattr(D, "LANGUAGE", tmp_path / "state/language")
     monkeypatch.setattr(D, "swapped_kb", lambda: 0)
     monkeypatch.setattr(D.subprocess, "Popen", FakeRecorder)
     written, copied = [], []
@@ -498,3 +499,35 @@ def test_status_reports_swapped_memory_and_unload_waits(monkeypatch, tmp_path, c
 def test_failed_insert_shows_a_short_message(daemon, result):
     daemon._inserted(result, D.PendingText("text", None))
     assert daemon.hud.calls[-1] == D.NOTICES[result][1]
+
+
+def test_space_and_arrows_choose_the_language_during_a_dictation(daemon):
+    daemon.config.languages = ["en", "de", "auto"]
+    daemon.language = "en"
+    with connect(daemon) as peer:
+        dictate(daemon)
+        assert peer.recv(64) == b"select\n"     # the helper binds Space, Left and Right
+        peer.sendall(b"next\nnext\n")
+        daemon._read_keys()
+        assert daemon.language == "auto"
+        assert ("choose", daemon.dictation, "de") in daemon.engine.calls
+        assert ("choose", daemon.dictation, "auto") in daemon.engine.calls
+        peer.sendall(b"previous\n")
+        daemon._read_keys()
+        assert daemon.language == "de"
+    assert D.chosen_language(daemon.config.languages) == "de"   # the next start keeps it
+
+
+def test_one_language_needs_no_selection_keys(daemon):
+    with connect(daemon) as peer:
+        dictate(daemon)
+        peer.setblocking(False)
+        with pytest.raises(BlockingIOError):
+            peer.recv(64)
+        daemon._choose(1)
+        assert daemon.language == "auto"
+
+
+def test_a_removed_language_falls_back_to_the_first(daemon):
+    D.remember_language("sv")
+    assert D.chosen_language(["en", "de"]) == "en"

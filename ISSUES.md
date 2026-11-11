@@ -35,3 +35,13 @@ to the required 16 kHz mono PCM format.
 
 Real microphone, keyboard, desktop clipboard, and target resource measurements
 remain outstanding. Use the matching daemon and helper for those checks.
+
+## Language keys need a hardware check
+
+During a dictation, voice-keys binds Space, Left, and Right in keyd, and the
+release drops the bindings. `keys/test-keyd-select.c` runs this through keyd's
+real key handling, and `tests/test_keys.py` checks the helper. Neither uses a
+real keyboard. Check on the keyboard: Super+Space before the caption switches
+the layout; Space and the arrows during a dictation change the language and
+reach no application; after the release, Super+Space and Super+arrows work.
+A `keyd bind reset` also drops runtime bindings that the user made.

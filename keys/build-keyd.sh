@@ -27,3 +27,12 @@ cc -D_DEFAULT_SOURCE -DDATA_DIR='"/usr/share/keyd"' -DCONFIG_DIR='"/etc/keyd"' \
     -iquote "$keyd_source/src" -Wl,--wrap=vkbd_send_key -o "$keyd_source/bin/test-guard" \
     keys/test-keyd-guard.c "$@" "$keyd_source/src/vkbd/uinput.c" -lpthread
 "$keyd_source/bin/test-guard"
+# Run the language key bindings through keyd's real key handling.
+set --
+for file in "$keyd_source"/src/*.c; do
+    case "$file" in */daemon.c|*/keyd.c|*/monitor.c|*/ipc.c|*/evloop.c|*/device.c) continue ;; esac
+    set -- "$@" "$file"
+done
+cc -D_DEFAULT_SOURCE -DDATA_DIR='"/usr/share/keyd"' -DCONFIG_DIR='"/etc/keyd"' \
+    -iquote "$keyd_source/src" -o "$keyd_source/bin/test-select" keys/test-keyd-select.c "$@"
+"$keyd_source/bin/test-select" keys/test-keyd-select.conf 2>/dev/null
