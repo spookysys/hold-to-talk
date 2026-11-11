@@ -55,6 +55,19 @@ No supported GNOME 50.6 operation with that guarantee was identified in this
 investigation. A compositor change would require a separate design and deployment
 plan. This investigation does not establish that such a change is impossible.
 
+## Firefox findings
+
+Firefox's ATK adapter exposes targeted editable text operations.
+However, [Mozilla bug 2087495](https://bugzilla.mozilla.org/show_bug.cgi?id=2087495)
+reports that these operations returned success without editing text.
+The report marks the fix for Firefox 161. Do not infer that an installed
+release contains the fix without checking its version and behavior.
+
+The [current adapter source](https://github.com/mozilla-firefox/firefox/blob/main/accessible/atk/nsMaiInterfaceEditableText.cpp)
+passes insertion to the selected accessible object's `InsertText` method.
+This is a candidate for testing, not a verified delivery guarantee.
+The installed Firefox version and a disposable-field test remain necessary.
+
 ## Checks before delivery
 
 Use disposable fields containing synthetic text. Test focus changes during the
