@@ -10,8 +10,9 @@ The model takes about 1 GB of RAM and a few seconds to load. The daemon asks
 for the load and frees the model after some idle minutes; a dictation begins
 only when the model is loaded.
 
-Measured on an Intel i3-1215U: two threads are the fastest. More threads wait
-for the slow cores of this CPU.
+Measured on an Intel i3-1215U, on mains power under load, for 30 s of speech:
+two threads decode in 0.46 s per second of speech and use 0.81 CPU seconds.
+One thread takes 0.62 s; three take 0.40 s but use more CPU.
 """
 
 from __future__ import annotations
@@ -31,6 +32,12 @@ from pathlib import Path
 import numpy as np
 
 RATE = 16000
+
+# onnxruntime settings: sherpa-onnx reads this file when the provider text is
+# "cpu:FILE", and passes each SessionConfig.* entry to every session. The file
+# lets idle worker threads sleep instead of spin. With spinning, two decoding
+# threads kept four cores busy.
+SESSION_CONFIG = Path(__file__).with_name("onnxruntime.conf")
 
 # Exists while the model is in memory; `voice status` reads it.
 LOADED = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "voice-model-loaded"
@@ -106,32 +113,40 @@ class Engine(threading.Thread):
     # after a load.
 
     def load(self) -> None:
-        self.jobs.put(("load", 0, b""))
+        self._put("load", 0)
 
     def begin(self, dictation: int, audio: bytes) -> None:
         """Start a dictation with the audio recorded before it began."""
-        self.jobs.put(("begin", dictation, audio))
+        self._put("begin", dictation, audio)
 
     def feed(self, dictation: int, audio: bytes) -> None:
-        self.jobs.put(("feed", dictation, audio))
+        self._put("feed", dictation, audio)
 
     def end(self, dictation: int) -> None:
-        self.jobs.put(("end", dictation, b""))
+        self._put("end", dictation)
 
     def drop(self, dictation: int) -> None:
         """Forget a canceled dictation; its queued audio is skipped."""
         self.dropped.add(dictation)
 
     def unload(self) -> None:
-        self.jobs.put(("unload", 0, b""))
+        self._put("unload", 0)
+
+    def _put(self, job: str, dictation: int, audio: bytes = b"") -> None:
+        self.jobs.put((job, dictation, audio, time.monotonic()))
 
     # The worker.
 
     def run(self) -> None:
         while True:
-            job, dictation, audio = self.jobs.get()
+            job, dictation, audio, queued = self.jobs.get()
             try:
                 self._do(job, dictation, audio)
+                if job == "end" and dictation not in self.dropped:
+                    # The microphone stopped when the job was queued. A long
+                    # time here means that decoding fell behind the speech.
+                    print(f"voice: text ready {time.monotonic() - queued:.2f} s after "
+                          "the microphone stopped", flush=True)
             except Exception:            # the thread must live on; the daemon needs an answer
                 traceback.print_exc()
                 self.stream, self.audio = None, bytearray()
@@ -221,7 +236,7 @@ class Engine(threading.Thread):
         self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
             tokens=one("tokens.txt"), encoder=one("encoder*.onnx"),
             decoder=one("decoder*.onnx"), joiner=one("joiner*.onnx"),
-            num_threads=self.threads)
+            num_threads=self.threads, provider=f"cpu:{SESSION_CONFIG}")
         trim_memory()
         self.load_s = time.monotonic() - started
         if self.marker:

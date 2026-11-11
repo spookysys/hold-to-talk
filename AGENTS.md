@@ -12,6 +12,8 @@ design for users; read it first.
   A change that cannot meet this is wrong, however good its other effects.
 - The target laptop has little RAM and a slow CPU. Idle cost is zero CPU and a
   few tens of MB. Measure a change on that laptop before you claim it is faster.
+- Speech must decode faster than it arrives, also on battery while other
+  programs run. The text must not fall behind the speech.
 - Nothing reaches the focused field until the release. A preview that is wrong
   must never damage the user's text.
 - Keep privileges narrow. The session process needs no access to `/dev/uinput`

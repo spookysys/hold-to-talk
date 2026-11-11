@@ -88,3 +88,13 @@ def test_unload_trims_memory_and_removes_marker(monkeypatch, tmp_path):
     engine._unload()
     assert trimmed == [True]
     assert not marker.exists()
+
+
+def test_threads_sleep_instead_of_spinning():
+    from voice.engine import SESSION_CONFIG
+
+    # sherpa-onnx reads key=value lines; keep comments out of this file.
+    lines = SESSION_CONFIG.read_text().splitlines()
+    assert "SessionConfig.session.intra_op.allow_spinning=0" in lines
+    assert "SessionConfig.session.inter_op.allow_spinning=0" in lines
+    assert all("=" in line for line in lines)

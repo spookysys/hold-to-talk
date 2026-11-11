@@ -5,6 +5,10 @@ PartOf=graphical-session.target
 
 [Service]
 ExecStart=%h/.local/bin/voice run
+# Speech must decode faster than it arrives, also when other programs keep
+# the CPU busy. The session slice has a higher CPU weight than the
+# applications' slice; GNOME runs its input method there too.
+Slice=session.slice
 Restart=on-failure
 RestartSec=2
 
