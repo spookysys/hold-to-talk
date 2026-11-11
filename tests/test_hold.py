@@ -43,11 +43,6 @@ def test_lost_up_starts_over():
     assert actions == [RECORD, BEGIN, CANCEL, RECORD]
 
 
-def test_limit_finishes_and_release_does_nothing():
-    _, actions = run([(0, "down"), (0.3, "tick"), (120, "limit"), (130, "up")])
-    assert actions == [RECORD, BEGIN, FINISH]
-
-
 def test_helper_lost_cancels():
     _, actions = run([(0, "down"), (0.3, "tick"), (1.0, "lost")])
     assert actions == [RECORD, BEGIN, CANCEL]

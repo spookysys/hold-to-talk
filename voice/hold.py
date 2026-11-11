@@ -48,11 +48,6 @@ class Hold:
         if name == "lost":                      # the helper went away
             self.state = IDLE
             return self._interrupted(state)
-        if name == "limit":                     # the dictation is too long
-            if state == ACTIVE:
-                self.state = CANCELED           # the release then does nothing
-                return [FINISH]
-            return []
         raise ValueError(f"unknown event {name!r}")
 
     @staticmethod

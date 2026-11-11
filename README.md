@@ -182,7 +182,6 @@ languages = ["de", "en"]   # fallback languages for automatic detection
 threads = 2
 idle_minutes = 30
 hold_ms = 300              # must match keyd's overload_tap_timeout
-max_seconds = 600          # stop recording here; wait for release to paste
 ```
 
 With automatic detection, unexpected scripts or empty results can trigger another

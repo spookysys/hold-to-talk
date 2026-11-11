@@ -47,6 +47,11 @@ LOADED = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "
 # recording that began with speech lost its first word.
 TAIL_S = 0.5
 
+# A second decode in the user's languages is for a short dictation with a wrong
+# language guess. Only this much audio is kept for it, so that a dictation of
+# any length uses constant memory. A longer dictation keeps its first text.
+AGAIN_MAX_S = 60
+
 
 @dataclass
 class Result:
@@ -111,7 +116,7 @@ class Engine(threading.Thread):
         self.recognizer = None
         self.stream = None                  # of the dictation in progress
         self.text = ""
-        self.audio = bytearray()            # of the dictation in progress, for a second decode
+        self.audio: bytearray | None = bytearray()   # for a second decode; None: too long
         self.load_s = 3.5                   # how long the last load took; for the loading bar
 
     # Calls from the daemon thread. Each dictation is begin, feed..., end. A
@@ -168,14 +173,18 @@ class Engine(threading.Thread):
         elif job == "begin":
             self._begin(dictation, audio)
         elif job == "feed":
-            self.audio += audio
+            if self.audio is not None:
+                self.audio += audio
+                if len(self.audio) > AGAIN_MAX_S * RATE * 2:
+                    self.audio = None
             self._feed(dictation, pcm(audio))
         elif job == "end":
             self._feed(dictation, np.zeros(int(TAIL_S * RATE), np.float32), quiet=True)
             self.stream.input_finished()
             self._decode()
-            wrong = foreign(self.text) or (not self.text and speechlike(pcm(bytes(self.audio))))
-            if self.language == "auto" and wrong and self.languages:
+            again = self.language == "auto" and self.languages and self.audio is not None
+            if again and (foreign(self.text) or
+                          (not self.text and speechlike(pcm(bytes(self.audio))))):
                 self.text = self._again()
             self.on_result(Result(dictation, self.text, final=True))
             self.stream, self.audio = None, bytearray()

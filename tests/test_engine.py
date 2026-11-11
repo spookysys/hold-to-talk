@@ -102,3 +102,23 @@ def test_threads_sleep_instead_of_spinning():
     assert "SessionConfig.session.intra_op.allow_spinning=0" in lines
     assert "SessionConfig.session.inter_op.allow_spinning=0" in lines
     assert all("=" in line for line in lines)
+
+
+def test_a_long_dictation_keeps_its_first_text():
+    from voice.engine import AGAIN_MAX_S, RATE
+
+    results = []
+    engine = Engine("", 2, "auto", results.append, lambda ok: None, languages=["de", "en"])
+    engine.stream = Mock()
+    engine._feed = Mock()
+    engine._decode = Mock()
+    engine._again = Mock(return_value="fallback")
+    engine.audio = bytearray()
+    second = b"\0\0" * RATE
+    for _ in range(AGAIN_MAX_S + 1):
+        engine._do("feed", 1, second)
+    assert engine.audio is None               # the memory stays constant
+    engine.text = "Привет"
+    engine._do("end", 1, b"")
+    assert not engine._again.called
+    assert results[-1].text == "Привет"

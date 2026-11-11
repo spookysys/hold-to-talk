@@ -48,7 +48,6 @@ class Config:
     languages: list[str] = field(default_factory=lambda: ["de", "en"])   # for a wrong guess
     hold_ms: int = 300           # must match overload_tap_timeout in keyd
     idle_minutes: float = 30     # then the model is freed
-    max_seconds: float = 600     # only against a key that stays down
     socket: str = "/run/voice-keys.sock"
 
     @classmethod
@@ -170,8 +169,6 @@ class Daemon:
                 self._connect()
             for _ in self.hold.tick(now):
                 self._begin()
-            if self.hold.state == H.ACTIVE and now - self.active_since > self.config.max_seconds:
-                self._act(self.hold.event("limit", now))
             if self.paste_at is not None and now >= self.paste_at:
                 log("voice-keys did not confirm paste; check that the helper is up to date")
                 # Close this connection so a late reply cannot confirm a later paste.
@@ -227,8 +224,6 @@ class Daemon:
                  self.stop_at, self.paste_at]
         if self.keys is None:
             times.append(self.connect_at)
-        if self.hold.state == H.ACTIVE:
-            times.append(self.active_since + self.config.max_seconds)
         times = [t for t in times if t is not None]
         return max(0.0, min(times) - now) if times else None
 
