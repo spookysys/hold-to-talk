@@ -149,6 +149,9 @@ static pid_t run_keyd(char *const argv[])
 	if (pid == 0) {
 		sigprocmask(SIG_SETMASK, &original_signals, NULL);
 		alarm(2);
+		int null = open("/dev/null", O_WRONLY | O_CLOEXEC);   /* keyd prints "Success" */
+		if (null >= 0)
+			dup2(null, STDOUT_FILENO);
 		execv(guarded_keyd, argv);
 		_exit(127);
 	}
