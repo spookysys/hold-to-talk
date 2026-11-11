@@ -134,7 +134,10 @@ def run(connection: socket.socket | None = None) -> int:
     body.pack(fill="x", padx=2 * pad, pady=(0, pad))
 
     def place() -> None:
-        root.geometry(f"{width}x{max(frame.winfo_height(), 1)}")   # wrap at the final width
+        # Wrap at the final width. The requested height is known before the first
+        # layout; the real height is then 1 pixel, and GNOME did not show a box
+        # that grew from 1 pixel on its first show.
+        root.geometry(f"{width}x{frame.winfo_reqheight()}")
         root.update_idletasks()
         lines = body.count("1.0", "end", "displaylines") or 1
         lines = lines[0] if isinstance(lines, tuple) else lines
