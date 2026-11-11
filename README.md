@@ -184,17 +184,18 @@ Create `~/.config/voice/config.toml` to override the defaults. All settings are 
 Restart voice after editing the file.
 
 ```toml
-languages = ["auto"]       # for example ["en", "de", "no", "auto"]
+languages = ["auto"]       # for example ["en", "de", "nb", "auto"]
 threads = 2
 idle_minutes = 30
 hold_ms = 300              # must match keyd's overload_tap_timeout
 ```
 
 `languages` lists the languages to choose from during a dictation. Codes are two
-letters, such as "de", "en", or "no" for Norwegian ("nb" and "nn" barely steer
-the model). "auto" lets the model guess;
-it can guess wrong, for example Swedish for Norwegian, and it does not say what
-it guessed. The first entry applies until you choose another one.
+letters, such as "de", "en", or "nb" for Norwegian Bokmål. "auto" lets the model
+guess; it can guess wrong, for example Swedish for Norwegian, and voice cannot
+show its guess. The [model card](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
+lists the languages and their accuracy. The first entry applies until you
+choose another one.
 Increasing the thread count is not necessarily faster on a small CPU.
 
 ## Privacy and limitations
