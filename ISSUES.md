@@ -27,18 +27,6 @@ A delivery confirmation from the application would be needed to remove this
 assumption. Test GTK, Qt, browsers, and terminals with delayed clipboard reads
 on Wayland. Do not describe keyd command completion as confirmed text delivery.
 
-## Speed on battery is not measured
-
-Speech must decode faster than it arrives, also on battery while other programs
-run. On mains power under load, the target laptop decodes one second of speech
-in about 0.46 s (see `voice/engine.py`), and the text is ready 0.25 to 0.47 s
-after the release. Nobody has measured on battery.
-
-Check: on battery, with other programs busy, dictate for a minute or more. The
-journal line "text ready X s after the microphone stopped" must stay below about
-half a second. A value that grows with the length of the dictation means that
-decoding falls behind.
-
 ## Language keys need a hardware check
 
 During a dictation, voice-keys binds Space, Left, and Right in keyd, and the

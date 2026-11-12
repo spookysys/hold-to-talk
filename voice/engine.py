@@ -18,6 +18,11 @@ half as long as it had lasted, and the new speech waited behind it.
 Measured on an Intel i3-1215U, on mains power under load, for 30 s of speech:
 two threads decode in 0.46 s per second of speech and use 0.81 CPU seconds.
 One thread takes 0.62 s; three take 0.40 s but use more CPU.
+
+On battery, two threads take 0.44 s without load. With all eight hardware
+threads busy in the applications' slice, they take 0.96 s in the daemon's
+session slice, and 1.33 s outside it. Three threads take 0.86 s under that
+load, but without load they use 0.96 CPU seconds instead of 0.77.
 """
 
 from __future__ import annotations
