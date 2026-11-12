@@ -101,4 +101,5 @@ A key injection acknowledgment is not proof that an application inserted text.
 Automated daemon and focus-history checks pass. The isolated GNOME 50.6 test
 restores an earlier synthetic window, resolves a delayed capture, and rejects
 a closed window. Run it with `/usr/bin/python3 tests/gnome_integration.py`.
-Physical keyboard and Firefox checks remain outstanding.
+On the real keyboard, a paste into the window that had the focus works.
+Focus changes during a dictation and Firefox are not checked yet.
