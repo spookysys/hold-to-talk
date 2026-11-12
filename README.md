@@ -174,6 +174,7 @@ Restarting does not download or install updates.
 | `voice restart` | Restart the installed program. |
 | `voice unload` | Request that the model be freed. |
 | `voice log` | Follow local logs, including recognized text. |
+| `voice history [N]` | Show the last N dictations, 10 if not given. |
 | `voice transcribe FILE.wav` | Test recognition without the keyboard or clipboard. |
 
 The transcription command requires a 16 kHz, mono, 16-bit PCM WAV file.
@@ -229,6 +230,7 @@ These are reference measurements, not guarantees for the latest build or other c
 - **The installer rejects the key mapping:** merge the printed entries into your existing keyd configuration, then rerun it.
 - **The caption says "log out and back in to restore windows":** GNOME Shell loads a new or updated extension only at login. `voice status` also reports it.
 - **The caption says "window changed":** the original window closed or did not take the focus. Paste the text from the clipboard.
+- **A dictation is missing or appears twice:** run `voice history` to see your last dictations.
 - **The caption works but paste fails:** install both parts again and check the log for helper errors.
 - **`voice` is not found:** check that `~/.local/bin` is in your `PATH`.
 

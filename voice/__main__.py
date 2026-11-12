@@ -7,6 +7,7 @@ Commands:
     voice unload     free the model now, instead of after the idle minutes
     voice status     running or not, model loaded or not, memory in use
     voice log        follow what voice hears and how long it takes
+    voice history [N]   the last N dictations, 10 if not given, newest last
 
     voice transcribe FILE   a 16 kHz mono WAV through the live path, for tests
 """
@@ -105,6 +106,29 @@ def log() -> int:
         return 0
 
 
+HEARD = "voice: heard: "      # the daemon's log line for each recognized text
+
+
+def history(count: int) -> int:
+    """Print the last dictations from the journal, where the daemon logs them."""
+    import json
+    import time
+
+    result = subprocess.run(
+        ["journalctl", "--user", "-u", SERVICE, "-g", f"^{HEARD}", "-n", str(count),
+         "-o", "json", "--output-fields=MESSAGE", "--no-pager", "-q"],
+        capture_output=True, text=True)
+    entries = sorted((int(entry["__REALTIME_TIMESTAMP"]), entry["MESSAGE"])
+                     for entry in map(json.loads, result.stdout.splitlines()))
+    if not entries:
+        print("voice: no dictations in the log")
+        return 0
+    for microseconds, message in entries:
+        when = time.strftime("%b %d %H:%M", time.localtime(microseconds / 1e6))
+        print(f"{when}  {message.removeprefix(HEARD)}\n")
+    return 0
+
+
 def transcribe(path: str) -> int:
     import queue
     import time
@@ -162,6 +186,8 @@ def main(argv: list[str]) -> int:
     if args == ["hud"]:                         # the daemon starts this
         from .hud import run as hud
         return hud()
+    if args[:1] == ["history"] and len(args) <= 2 and all(a.isdigit() for a in args[1:]):
+        return history(int(args[1]) if len(args) == 2 else 10)
     if len(args) == 2 and args[0] == "transcribe":
         return transcribe(args[1])
     print(__doc__.strip())

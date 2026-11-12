@@ -525,6 +525,28 @@ def test_status_reports_swapped_memory_and_unload_waits(monkeypatch, tmp_path, c
     assert "voice: model freed" in capsys.readouterr().out
 
 
+def test_history_lists_the_last_dictations_newest_last(monkeypatch, capsys):
+    import json
+    import voice.__main__ as cli
+
+    entries = [(2_000_000_000_000_000, "voice: heard: second"),
+               (1_000_000_000_000_000, "voice: heard: first")]   # journalctl gives these newest first
+    out = "\n".join(json.dumps({"__REALTIME_TIMESTAMP": str(t), "MESSAGE": m}) for t, m in entries)
+    calls = []
+    monkeypatch.setattr(cli.subprocess, "run",
+                        lambda args, **kw: calls.append(args) or type("R", (), {"stdout": out})())
+    assert cli.main(["voice", "history", "2"]) == 0
+    printed = capsys.readouterr().out
+    assert printed.index("first") < printed.index("second")
+    assert "heard:" not in printed
+    assert calls[0][calls[0].index("-n") + 1] == "2"
+
+    out = ""
+    cli.main(["voice", "history"])
+    assert "no dictations" in capsys.readouterr().out
+    assert calls[1][calls[1].index("-n") + 1] == "10"
+
+
 @pytest.mark.parametrize("result", ["changed", "not-loaded", "failed"])
 def test_failed_insert_shows_a_short_message(daemon, result):
     daemon._inserted(result, D.PendingText("text", None))

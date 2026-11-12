@@ -577,7 +577,7 @@ class Daemon:
         if not result.text:
             log("heard nothing, so nothing is written")
         else:
-            log(f"heard: {result.text}")
+            log(f"heard: {result.text}")      # `voice history` reads this line
             self.waiting.append(PendingText(result.text, destination, paste))
             if self.hold.state != H.IDLE:
                 log("the text waits for the release")
