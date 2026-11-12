@@ -51,8 +51,9 @@ shortcut. Shift, Ctrl, and Alt do not cancel.
 A touchpad tap does not count as a mouse button; press the touchpad down.
 
 The microphone starts at key-down. It continues for 0.3 seconds after release
-to capture the last syllable. If earlier text becomes ready during a new hold,
-it waits for release before pasting.
+to capture the last syllable. If no words showed before the release, the caption
+closes at once; a short word that comes late is still pasted. If earlier text
+becomes ready during a new hold, it waits for release before pasting.
 
 Dictation replaces both the clipboard and the primary selection, which some
 terminals use. **The dictated text stays there; the old clipboard is not restored.**

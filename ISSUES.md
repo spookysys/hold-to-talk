@@ -39,19 +39,6 @@ journal line "text ready X s after the microphone stopped" must stay below about
 half a second. A value that grows with the length of the dictation means that
 decoding falls behind.
 
-## A silent hold keeps the caption for about 0.6 s
-
-After a hold with no speech, the caption stays 0.6 to 0.75 s after the release.
-The microphone runs 0.3 s longer (`AFTER_S`), then the engine decodes the rest
-of the audio with 0.5 s of silence after it. No text before the release does not
-prove silence: the model works in pieces of 560 ms, so a short word in a short
-hold has no text yet at the release.
-
-Proposed: when there is no text at the release, hide the caption at once and let
-the decode go on. A late word is still pasted, but it arrives after the caption
-has gone. A check of the audio level could skip the decode, but it would lose
-quiet speech.
-
 ## Language keys need a hardware check
 
 During a dictation, voice-keys binds Space, Left, and Right in keyd, and the

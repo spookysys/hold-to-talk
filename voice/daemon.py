@@ -151,6 +151,7 @@ class Daemon:
         self.writing: set[int] = set()   # dictations that wait for their final text
         self.canceled: set[int] = set()  # their text goes to the clipboard only
         self.text = ""                   # of the newest dictation, as the box shows it
+        self.hidden = False              # the newest dictation's box stays hidden until its end
         self.model = "unloaded"          # or "loading", "loaded"
         self.load_since = 0.0
         self.unload_at: float | None = None
@@ -412,6 +413,7 @@ class Daemon:
         self.destinations[self.dictation] = self.destination
         self.listening = True
         self.text = ""
+        self.hidden = False
         self.engine.begin(self.dictation, bytes(self.before))
         if len(self.config.languages) > 1:
             self._send_keys(b"select\n")    # Space, Left and Right choose the language
@@ -456,7 +458,7 @@ class Daemon:
         self.model = "loaded"
         if self.listening and self.stop_at is None:
             self._show("listening", self.text, hint=HINT)
-        elif self.stop_at is not None or self.dictation in self.writing:
+        elif not self.hidden and (self.stop_at is not None or self.dictation in self.writing):
             self._show("writing", self.text)
         self._schedule_unload()
 
@@ -494,8 +496,13 @@ class Daemon:
         log(f"stopped listening after {time.monotonic() - self.active_since:.1f} s")
         if self.model == "loading":
             self._show_load()
-        else:
+        elif self.text:
             self._show("writing", self.text)
+        else:
+            # Most likely nothing was said. The decode goes on, because a short
+            # word has no text yet at the release, and a late word is pasted.
+            self.hidden = True
+            self.hud.hide()
 
     def _cancel(self) -> None:
         """Another key, or voice-keys went away: copy the text, but do not paste it."""
@@ -506,6 +513,7 @@ class Daemon:
         self.canceled.add(self.dictation)
         self.stop_at = time.monotonic()  # the key ends the speech; no time after it
         self._stop()
+        self.hidden = True
         self.hud.hide()                  # the shortcut of the key goes on
 
     def _stop(self) -> None:
@@ -549,7 +557,7 @@ class Daemon:
             self.text = result.text
             if self.listening and self.stop_at is None and not result.final:
                 self._show("listening", result.text, hint=HINT)
-            elif (not result.final and result.dictation not in self.canceled
+            elif (not result.final and not self.hidden
                     and (self.stop_at is not None or result.dictation in self.writing)):
                 self._show("writing", result.text)
         if not result.final:

@@ -182,6 +182,36 @@ def test_a_release_during_the_load_keeps_the_bar(daemon):
     assert daemon.hud.calls[-1] == "writing"
 
 
+def test_a_cancel_during_the_load_keeps_the_box_hidden(daemon):
+    daemon.model = "unloaded"
+    dictate(daemon)
+    key(daemon, "key", 1.5)
+    daemon._loaded(True)
+    assert daemon.hud.calls[-1] == "hide"
+
+
+def test_a_release_before_any_text_hides_the_box_at_once(daemon):
+    dictate(daemon)
+    key(daemon, "up", 2)
+    assert daemon.hud.calls[-1] == "hide"
+    daemon._stop()
+    daemon._text(Result(daemon.dictation, "yes", final=False))
+    assert daemon.hud.calls[-1] == "hide"   # a late word does not open the box again
+    daemon._text(Result(daemon.dictation, "yes", final=True))
+    settle(daemon)
+    assert daemon.written == ["yes"]
+
+
+def test_a_release_after_text_shows_the_rest(daemon):
+    dictate(daemon)
+    daemon._text(Result(daemon.dictation, "hello", final=False))
+    key(daemon, "up", 2)
+    assert daemon.hud.calls[-1] == "writing"
+    daemon._stop()
+    daemon._text(Result(daemon.dictation, "hello there", final=False))
+    assert daemon.hud.calls[-1] == "writing"
+
+
 def test_a_failed_load_can_be_tried_again(daemon):
     daemon.model = "loading"
     daemon._loaded(False)
