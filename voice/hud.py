@@ -208,10 +208,11 @@ def run(connection: socket.socket | None = None) -> int:
         header.configure(text=f"voice: {state}")
         languages = message.get("languages", [])
         labels = choices.winfo_children()
-        if [label.cget("text") for label in labels] != [l.upper() for l in languages]:
+        if [label.cget("text") for label in labels] != languages:
             for label in labels:
                 label.destroy()
-            labels = [tk.Label(choices, text=l.upper(), font=(FONT, 13, "bold"), padx=pad // 2)
+            # Lowercase like the header: capitals looked larger than "listening".
+            labels = [tk.Label(choices, text=l, font=(FONT, 13, "bold"), padx=pad // 2)
                       for l in languages]
             for label in labels:
                 label.pack(side="left")
